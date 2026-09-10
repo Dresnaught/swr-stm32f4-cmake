@@ -1,0 +1,5 @@
+/Drivers/CMSIS
+/build
+/compile_commands.json
+/Core/Src/startup_stm32f401xc.s
+/Core/Src/system_stm32f4xx.c
