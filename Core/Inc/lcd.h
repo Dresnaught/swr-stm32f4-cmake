@@ -8,9 +8,14 @@ uint8_t I2C1_Master_Transmit(uint8_t slave_addr, uint8_t *data, uint8_t size);
 void lcd_send_cmd(char cmd);
 void lcd_send_data(char data);
 void lcd_send_nibble(char nibble);
+// Function to initialize the LCD
 void lcd_init(void);
+// Function to set the cursor position on the LCD
 void lcdCursor(int row, int col);
+// Function to display a string on the LCD
 void lcdString(char *str);
-void lcdInt(int num);
+// Function to display an integer on the LCD
+void lcdInt(int num);\
+// Function to display a float on the LCD
 void lcdFloat(float num);
 #endif // !LCD_H

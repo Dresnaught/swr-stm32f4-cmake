@@ -1,27 +1,34 @@
-//#include "lcd.h"
+#include "lcd.h"
+#include "adc.h"
+#include "conversion.h"
+#include "button.h"
+#include "menu.h"
 #include "stm32f401xc.h"
 #include "sytick.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 
 
 int main(void) {
   timeInit();
-  //  I2C1Init();
-  //  lcd_init();
+  I2C1Init();
+  lcd_init();
+  buttonInit();
+  ADCInit();
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
   GPIOC->MODER &= ~(0x3 << (13 * 2));
   GPIOC->MODER |= (0x1 << (13 * 2));
-  /*lcdCursor(0, 0);
-  lcdString("Hello World");
+  lcdCursor(0, 0);
+  lcdString("SWR Meter");
   lcdCursor(1, 0);
-  lcdFloat(2.250);*/
+  delay_ms(1000);
+  // uint32_t timeDelay = 0;
 
-  uint32_t timeDelay = 0;
   while (1) {
-     if (millis - timeDelay >= 1000) {
-     timeDelay = millis;
-     GPIOC->ODR ^= (0x1 << 13);
+    readReading();
+    if (updateReadings()) {
+      displayMenu(currentMenu);
     }
   }
 }

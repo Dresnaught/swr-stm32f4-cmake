@@ -1,9 +1,8 @@
 #include "sytick.h"
 #include "stm32f401xc.h"
 
-// Include a millis (track how many time the MCU ran) and a delay by
-// microseconds and milliseconds
-volatile uint32_t millis = 0;
+// (track how many time the MCU ran) by milliseconds
+volatile uint32_t now = 0;
 
 void timeInit(void) {
   SysTick->CTRL &= ~0x7;
@@ -17,12 +16,12 @@ void timeInit(void) {
 }
 
 __attribute__((used)) void SysTick_Handler(void) {
-  millis++;
+  now++;
 }
 
 void delay_ms(uint32_t ms) {
-  uint32_t delay = millis;
-  while ((millis - delay) < ms) {
+  uint32_t delay = now;
+  while ((now - delay) < ms) {
     __NOP();
   }
 }

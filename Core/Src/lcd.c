@@ -2,7 +2,7 @@
 #include "stm32f401xc.h"
 #include "sytick.h" // for delay_ms
 
-// LCD 16x02 functions for this project it uses the I2C version.
+// I2C1 initialization function
 void I2C1Init(void) {
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
   RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
