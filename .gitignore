@@ -1,5 +1,4 @@
-/Drivers/CMSIS
+/Drivers/CMSIS/Core
 /build
-/Core/Src/startup_stm32f401xc.s
 /.vscode
 /.cache
