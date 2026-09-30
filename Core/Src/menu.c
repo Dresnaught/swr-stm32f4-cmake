@@ -24,6 +24,7 @@ uint16_t lastCalibratedFWD = 0;
 uint16_t lastCalibratedREF = 0;
 uint16_t lastCalibratedRAD = 0;
 float lastCalculatedSWRFloatValue = 0.0f;
+
 bool updateReadings(void) {
     uint16_t newCalibratedFWD = calibratedFWD;
     uint16_t newCalibratedREF = calibratedREF;
@@ -98,9 +99,9 @@ void displayMenu(MenuState menu) {
             lcdCursor(0, 0);
             lcdString(mainMenuItems[buttonMenuState]);
             if (buttonRead(13)) {
-                buttonMenuState = (buttonMenuState + 1) % 4; // Cycle upwards through menu items
+                buttonMenuState = (buttonMenuState + 1) % 5; // Cycle upwards through menu items
             } else if (buttonRead(15)) {
-              buttonMenuState = (buttonMenuState + 3) % 4; // Cycle backwards through menu items
+              buttonMenuState = (buttonMenuState + 4) % 5; // Cycle backwards through menu items
             } else if (buttonRead(14)) {
                 switch (buttonMenuState) {
                     case 0:

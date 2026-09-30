@@ -25,8 +25,11 @@ extern char* mainMenuItems[];
 extern char* calMenuItems[];
 extern bool UIState;
 
+// Function returns true if readings have changed, false otherwise
 bool updateReadings(void);
+
 void calibrationMenu(void);
+// Function to display the current menu based on the MenuState
 void displayMenu(MenuState menu);
 
 #endif // MENU_H
