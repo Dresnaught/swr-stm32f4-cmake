@@ -1,5 +1,10 @@
-#include "stm32f401xc.h"
 #include "button.h"
+#include "stm32f401xc.h"
+#include "sytick.h"
+
+static bool lastButtonState[3] = {false, false, false};
+static uint32_t lastPressTime[3] = {0, 0, 0};
+static uint32_t lastRepeatTime[3] = {0, 0, 0};
 
 void buttonInit(void) {
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
@@ -12,5 +17,50 @@ bool buttonRead(uint8_t button) {
   if (button < 13 || button > 15) {
     return false; // Invalid button number
   }
-  return (GPIOB->IDR & (1 << button)) == 0; // Return true if button is pressed (active low)
+  return (GPIOB->IDR & (1 << button)) == 0; // Active low
+}
+
+bool buttonJustPressed(uint8_t button) {
+  if (button < 13 || button > 15) return false;
+  uint8_t idx = button - 13;
+  bool isPressed = buttonRead(button);
+  bool triggered = false;
+
+  if (isPressed && !lastButtonState[idx]) {
+    if ((now - lastPressTime[idx]) > 30) { // 30ms debounce
+      triggered = true;
+      lastPressTime[idx] = now;
+      lastRepeatTime[idx] = now + 400; // 400ms delay before repeat kicks in
+    }
+  }
+
+  lastButtonState[idx] = isPressed;
+  return triggered;
+}
+
+bool buttonRepeat(uint8_t button) {
+  if (button < 13 || button > 15) return false;
+  uint8_t idx = button - 13;
+  bool isPressed = buttonRead(button);
+
+  if (!isPressed) {
+    lastButtonState[idx] = false;
+    return false;
+  }
+
+  if (!lastButtonState[idx]) {
+    // Initial press
+    lastButtonState[idx] = true;
+    lastPressTime[idx] = now;
+    lastRepeatTime[idx] = now + 400;
+    return true;
+  }
+
+  // Already held down, check repeat interval
+  if (now >= lastRepeatTime[idx]) {
+    lastRepeatTime[idx] = now + 120; // 120ms repeat rate
+    return true;
+  }
+
+  return false;
 }

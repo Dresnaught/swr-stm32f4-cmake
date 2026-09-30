@@ -1,7 +1,9 @@
 #ifndef MENU_H
 #define MENU_H
+
 #include <stdint.h>
 #include <stdbool.h>
+#include "calibration.h"
 
 extern uint16_t lastCalibratedFWD;
 extern uint16_t lastCalibratedREF;
@@ -18,18 +20,15 @@ typedef enum {
 } MenuState;
 
 extern MenuState currentMenu;
+extern bool UIState; // false = REF power displayed, true = RAD (Radio-In) power displayed
 
-extern uint8_t buttonMenuState;
-extern uint8_t buttonCalState;
-extern char* mainMenuItems[];
-extern char* calMenuItems[];
-extern bool UIState;
-
-// Function returns true if readings have changed, false otherwise
+// Checks sensor values, timer ticks, and button state
 bool updateReadings(void);
 
-void calibrationMenu(void);
-// Function to display the current menu based on the MenuState
+// Main menu dispatcher
 void displayMenu(MenuState menu);
+
+// Calibration menu handler
+void calibrationMenu(CalChannelType ch);
 
 #endif // MENU_H

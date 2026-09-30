@@ -17,15 +17,15 @@ A high-performance embedded firmware and hardware project for an RF Standing Wav
 | **STM32F4 Peripheral Drivers (CMSIS)** | Ready | 100% |
 | **Measurement & SWR Calculation Engine** | Ready | 100% |
 | **CMake Build System & Toolchain Setup** | Ready | 100% |
-| **UI & Display Subsystem (Prototyping)** | Functional | 85% |
-| **Menu & Button Navigation State Machine** | Functional | 75% |
-| **Interactive Calibration Storage** | In Progress | 25% |
+| **UI & Display Subsystem (Prototyping)** | Functional | 90% |
+| **Menu & Button Navigation State Machine** | Functional | 100% |
+| **Interactive In-Flash Calibration Storage** | Ready | 100% |
 | **Hardware Protection (Relay Cutoff & Buzzer)** | In Development | 30% |
 | **Digital Controller PCB & Schematic (STC8)** | **Ready (Gerbers Generated)** | **100%** |
 | **Physical PCB Fabrication & Assembly** | Pending | 0% |
 | **STC8 Target Porting (STC8H8K64U)** | Planned (Post-STM32 verification) | 0% |
 | **Hardware Field Testing & RF Bench Tuning** | Pending | 10% |
-| **Overall Project Completion** | **Active Development** | **~70%** |
+| **Overall Project Completion** | **Active Development** | **~80%** |
 
 ### Detailed Checklist
 
@@ -34,22 +34,26 @@ A high-performance embedded firmware and hardware project for an RF Standing Wav
   - [x] I2C1 Master driver with open-drain GPIO configuration (`lcd.c`)
   - [x] HD44780 character LCD driver via PCF8574 backpack (`lcd.c`)
   - [x] 12-bit ADC1 driver for PA0 (CH0), PA1 (CH1), and PA2 (CH2) (`adc.c`)
-  - [x] Active-low GPIO button input driver with internal pull-ups (`button.c`)
+  - [x] Active-low GPIO button input driver with debouncing and auto-repeat (`button.c`)
 - [x] **Calculations & DSP (Portable C)**
   - [x] Fast integer square root algorithm (`isqrt`)
   - [x] SWR computation with edge-case protection (infinite SWR, zero forward power, perfect match)
   - [x] Multi-point Piecewise Linear Interpolation (PWLI) for diode non-linearity correction (`conversion.c`)
-  - [x] Default 7-point calibration lookup curves for FWD, REF, and RAD channels
+  - [x] Default 7-point calibration lookup curves for FWD (1000W), REF (100W), and RAD (50W)
 - [x] **Display & UI Navigation**
   - [x] Main measurement screen displaying Forward Power, SWR, and Reflected/Radiated Power
   - [x] Refresh optimization (only updates screen when sensor values or button states change)
-  - [x] 3-Button navigation state machine (Up / Select / Down)
-  - [x] Display toggle between Reflected (REF) and Radiated (RAD) views (`Menu UI`)
-  - [x] Calibration sub-menu navigation skeleton (`Cal FWD`, `Cal REF`, `Cal RAD`)
-- [ ] **Interactive In-System Calibration**
-  - [ ] Live calibration point capture ("Add Cal Point")
-  - [ ] Calibration point removal / editing via UI ("Remove Cal Point")
-  - [ ] Non-volatile persistence (Flash memory sector emulation)
+  - [x] 3-Button debounced navigation state machine (Up / Select / Down)
+  - [x] Display toggle between Reflected (REF) and Radio-In (RAD) views (`Menu UI` & quick toggle)
+  - [x] Full calibration navigation workflows for FWD, REF, and RAD channels
+- [x] **Interactive In-System Calibration & Storage**
+  - [x] Dynamic calibration point management (Add Point, Edit Point, Remove Point, View Points)
+  - [x] Dynamic capacity up to 10 points per channel with minimum 2-point safety guard
+  - [x] Target wattage adjustment with dynamic scaling (FWD up to 1000W, REF up to 100W, RAD up to 50W)
+  - [x] 5-second sampling routine with live countdown and continuous ADC averaging
+  - [x] Automatic monotonic table sorting upon calibration point updates
+  - [x] Flash non-volatile persistence (Sector 5 storage HAL with checksum verification)
+  - [x] Calibration point table inspection view (`View Points`) and factory default reset
 - [ ] **Hardware Protection & Safety (Relay & Buzzer)**
   - [ ] High-SWR protection relay trigger (disconnect transmitter / PTT line when SWR exceeds safety limit, e.g. $\text{SWR} > 3.0$)
   - [ ] Optocoupler-isolated relay latching and fault lockout logic

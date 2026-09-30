@@ -3,7 +3,7 @@ ENTRY(Reset_Handler)
 /* Specify the memory areas for STM32F401RCT6 */
 MEMORY
 {
-  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 256K
+  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 128K
   RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 64K
 }
 
@@ -72,6 +72,10 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     _ebss = .;         
+    __bss_end__ = _ebss;
+    end = .;
+    _end = .;
+    __end__ = .;
   } >RAM
 
   /* Define user stack pointer address top boundary */
