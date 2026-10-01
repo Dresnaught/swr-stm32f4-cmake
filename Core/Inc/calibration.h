@@ -31,9 +31,17 @@ typedef struct {
 } CalChannel_t;
 
 typedef struct {
+  uint16_t radLimitWatts; // 1 to 50W (default: 15W)
+  uint16_t swrLimitX100;  // 110 to 500 (default: 200 for 2.0 SWR)
+  uint16_t enabled;       // 1 = enabled, 0 = disabled
+  uint16_t reserved;
+} ProtectionSettings_t;
+
+typedef struct {
   uint32_t magic;
   uint32_t version;
   CalChannel_t channels[CAL_CH_COUNT];
+  ProtectionSettings_t protection;
   uint32_t checksum;
 } CalConfig_t;
 

@@ -5,6 +5,7 @@
 #include "button.h"
 #include "sytick.h"
 #include "adc.h"
+#include "protection.h"
 #include <stdio.h>
 
 MenuState currentMenu = MAIN_SCREEN;
@@ -379,14 +380,139 @@ void calibrationMenu(CalChannelType ch) {
   }
 }
 
+typedef enum {
+  PROT_STEP_MENU,
+  PROT_STEP_SET_RAD,
+  PROT_STEP_SET_SWR,
+  PROT_STEP_STATUS
+} ProtStepState;
+
+static ProtStepState protStep = PROT_STEP_MENU;
+static uint8_t protMenuIndex = 0;
+static const char *protStatusLine0 = "";
+static const char *protStatusLine1 = "";
+
+void protectionMenu(void) {
+  char line0[32];
+  char line1[32];
+  uint16_t radLim = protectionGetRadLimit();
+  uint16_t swrLim = protectionGetSwrLimit();
+  bool rly = protectionGetRelayState();
+
+  switch (protStep) {
+    case PROT_STEP_MENU: {
+      snprintf(line0, sizeof(line0), "Protection Menu");
+      switch (protMenuIndex) {
+        case 0:
+          snprintf(line1, sizeof(line1), "> 1.RAD Trip:%2uW", radLim);
+          break;
+        case 1:
+          snprintf(line1, sizeof(line1), "> 2.SWR Trip:%1.1f", (double)swrLim / 100.0);
+          break;
+        case 2:
+          snprintf(line1, sizeof(line1), "> 3.Relay:%s", rly ? "ON(NC)" : "OFF(NO)");
+          break;
+        case 3:
+          snprintf(line1, sizeof(line1), "> 4.Reset Trip");
+          break;
+        case 4:
+          snprintf(line1, sizeof(line1), "> 5.Save Settings");
+          break;
+        case 5:
+          snprintf(line1, sizeof(line1), "> 6.Back");
+          break;
+      }
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonJustPressed(13)) {
+        protMenuIndex = (protMenuIndex + 1) % 6;
+      } else if (buttonJustPressed(15)) {
+        protMenuIndex = (protMenuIndex + 5) % 6;
+      } else if (buttonJustPressed(14)) {
+        switch (protMenuIndex) {
+          case 0:
+            protStep = PROT_STEP_SET_RAD;
+            break;
+          case 1:
+            protStep = PROT_STEP_SET_SWR;
+            break;
+          case 2:
+            protectionToggleRelay();
+            break;
+          case 3:
+            protectionReset();
+            protStatusLine0 = "Trip Reset OK";
+            protStatusLine1 = "Relay Restored";
+            protStep = PROT_STEP_STATUS;
+            break;
+          case 4:
+            calSaveToFlash();
+            protStatusLine0 = "Flash Storage";
+            protStatusLine1 = "Settings Saved!";
+            protStep = PROT_STEP_STATUS;
+            break;
+          case 5:
+            currentMenu = MAIN_MENU;
+            break;
+        }
+      }
+      break;
+    }
+
+    case PROT_STEP_SET_RAD: {
+      snprintf(line0, sizeof(line0), "RAD Pwr Trip Set");
+      snprintf(line1, sizeof(line1), "Limit: [ %2u ] W", radLim);
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonRepeat(13)) { // UP
+        protectionSetRadLimit(stepRadLimitUp(radLim));
+      } else if (buttonRepeat(15)) { // DOWN
+        protectionSetRadLimit(stepRadLimitDown(radLim));
+      } else if (buttonJustPressed(14)) { // SELECT
+        protStep = PROT_STEP_MENU;
+      }
+      break;
+    }
+
+    case PROT_STEP_SET_SWR: {
+      snprintf(line0, sizeof(line0), "SWR Trip Limit");
+      snprintf(line1, sizeof(line1), "Limit: [ %1.1f ]", (double)swrLim / 100.0);
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonRepeat(13)) { // UP
+        protectionSetSwrLimit(stepSwrLimitUp(swrLim));
+      } else if (buttonRepeat(15)) { // DOWN
+        protectionSetSwrLimit(stepSwrLimitDown(swrLim));
+      } else if (buttonJustPressed(14)) { // SELECT
+        protStep = PROT_STEP_MENU;
+      }
+      break;
+    }
+
+    case PROT_STEP_STATUS: {
+      lcdPrintRow(0, protStatusLine0);
+      lcdPrintRow(1, protStatusLine1);
+
+      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        protStep = PROT_STEP_MENU;
+      }
+      break;
+    }
+  }
+}
+
 static const char *mainMenuItemsList[] = {
   "Back to Main",
   "Cal FWD (1000W)",
   "Cal REF (100W)",
   "Cal RAD (50W)",
+  "Protections",
   "Display Mode"
 };
-#define MAIN_MENU_COUNT 5
+#define MAIN_MENU_COUNT 6
 
 void displayMenu(MenuState menu) {
   char buf0[32];
@@ -394,6 +520,23 @@ void displayMenu(MenuState menu) {
 
   switch (menu) {
     case MAIN_SCREEN: {
+      if (protectionIsTripped()) {
+        lcdPrintRow(0, "*TRIP ALARM CUT*");
+        if (protectionGetTripCause() == TRIP_RAD_OVERPOWER) {
+          snprintf(buf1, sizeof(buf1), "HI RAD:%2uW >%2uW", lastCalibratedRAD, protectionGetRadLimit());
+        } else {
+          snprintf(buf1, sizeof(buf1), "HI SWR:%1.1f >%1.1f", (double)lastCalculatedSWRFloatValue, (double)protectionGetSwrLimit() / 100.0);
+        }
+        lcdPrintRow(1, buf1);
+
+        if (buttonJustPressed(14)) { // SELECT resets trip
+          protectionReset();
+        } else if (buttonJustPressed(13) || buttonJustPressed(15)) {
+          currentMenu = MAIN_MENU;
+        }
+        break;
+      }
+
       // Row 0: FWD Power and SWR
       snprintf(buf0, sizeof(buf0), "FWD:%4uW S:%1.2f", lastCalibratedFWD, (double)lastCalculatedSWRFloatValue);
       lcdPrintRow(0, buf0);
@@ -445,6 +588,11 @@ void displayMenu(MenuState menu) {
             calMenuActionIndex = 0;
             break;
           case 4:
+            currentMenu = MAIN_PROTECTION_MENU;
+            protStep = PROT_STEP_MENU;
+            protMenuIndex = 0;
+            break;
+          case 5:
             currentMenu = MAIN_MENU_UI;
             break;
         }
@@ -462,6 +610,10 @@ void displayMenu(MenuState menu) {
 
     case MAIN_CAL_RAD_MENU:
       calibrationMenu(CAL_CH_RAD);
+      break;
+
+    case MAIN_PROTECTION_MENU:
+      protectionMenu();
       break;
 
     case MAIN_MENU_UI: {

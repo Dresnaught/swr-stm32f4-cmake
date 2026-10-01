@@ -68,6 +68,12 @@ void calResetDefaults(void) {
   activeCal.channels[CAL_CH_RAD].maxWatts = 50;
   memcpy(activeCal.channels[CAL_CH_RAD].points, defaultRadPoints, sizeof(defaultRadPoints));
 
+  // Protection defaults
+  activeCal.protection.radLimitWatts = 15; // 15W default trip for Radio-In
+  activeCal.protection.swrLimitX100 = 200; // 2.00 default trip for SWR
+  activeCal.protection.enabled = 1;
+  activeCal.protection.reserved = 0;
+
   activeCal.checksum = calCalculateChecksum(&activeCal);
 }
 

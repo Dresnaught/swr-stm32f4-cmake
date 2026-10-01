@@ -16,6 +16,7 @@ typedef enum {
   MAIN_CAL_FWD_MENU,
   MAIN_CAL_REF_MENU,
   MAIN_CAL_RAD_MENU,
+  MAIN_PROTECTION_MENU,
   MAIN_MENU_UI
 } MenuState;
 
@@ -30,5 +31,8 @@ void displayMenu(MenuState menu);
 
 // Calibration menu handler
 void calibrationMenu(CalChannelType ch);
+
+// Protection menu handler
+void protectionMenu(void);
 
 #endif // MENU_H

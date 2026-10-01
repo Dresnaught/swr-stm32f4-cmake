@@ -2,6 +2,7 @@
 #include "adc.h"
 #include "conversion.h"
 #include "calibration.h"
+#include "protection.h"
 #include "button.h"
 #include "menu.h"
 #include "stm32f401xc.h"
@@ -15,7 +16,8 @@ int main(void) {
   lcd_init();
   buttonInit();
   ADCInit();
-  calInit(); // Load calibration from Flash or factory defaults
+  calInit(); // Load calibration & protection settings from Flash
+  protectionInit(); // Initialize protection relay / optocoupler pin (PB2)
 
   // Configure PC13 (Status LED on BlackPill) as output
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
@@ -30,6 +32,8 @@ int main(void) {
 
   while (1) {
     readReading();
+    protectionCheck(calibratedFWD, calibratedRAD, calculatedSWRValue);
+
     if (updateReadings()) {
       displayMenu(currentMenu);
     }

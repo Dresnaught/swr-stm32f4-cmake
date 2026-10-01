@@ -17,15 +17,15 @@ A high-performance embedded firmware and hardware project for an RF Standing Wav
 | **STM32F4 Peripheral Drivers (CMSIS)** | Ready | 100% |
 | **Measurement & SWR Calculation Engine** | Ready | 100% |
 | **CMake Build System & Toolchain Setup** | Ready | 100% |
-| **UI & Display Subsystem (Prototyping)** | Functional | 90% |
+| **UI & Display Subsystem (Prototyping)** | Functional | 95% |
 | **Menu & Button Navigation State Machine** | Functional | 100% |
 | **Interactive In-Flash Calibration Storage** | Ready | 100% |
-| **Hardware Protection (Relay Cutoff & Buzzer)** | In Development | 30% |
+| **Hardware Protection (Dual-Trigger Relay Cutoff)** | Ready | 100% |
 | **Digital Controller PCB & Schematic (STC8)** | **Ready (Gerbers Generated)** | **100%** |
 | **Physical PCB Fabrication & Assembly** | Pending | 0% |
 | **STC8 Target Porting (STC8H8K64U)** | Planned (Post-STM32 verification) | 0% |
 | **Hardware Field Testing & RF Bench Tuning** | Pending | 10% |
-| **Overall Project Completion** | **Active Development** | **~80%** |
+| **Overall Project Completion** | **Active Development** | **~90%** |
 
 ### Detailed Checklist
 
@@ -35,6 +35,7 @@ A high-performance embedded firmware and hardware project for an RF Standing Wav
   - [x] HD44780 character LCD driver via PCF8574 backpack (`lcd.c`)
   - [x] 12-bit ADC1 driver for PA0 (CH0), PA1 (CH1), and PA2 (CH2) (`adc.c`)
   - [x] Active-low GPIO button input driver with debouncing and auto-repeat (`button.c`)
+  - [x] Optocoupler relay driver GPIO output on PB2 (`protection.c`)
 - [x] **Calculations & DSP (Portable C)**
   - [x] Fast integer square root algorithm (`isqrt`)
   - [x] SWR computation with edge-case protection (infinite SWR, zero forward power, perfect match)
@@ -46,6 +47,8 @@ A high-performance embedded firmware and hardware project for an RF Standing Wav
   - [x] 3-Button debounced navigation state machine (Up / Select / Down)
   - [x] Display toggle between Reflected (REF) and Radio-In (RAD) views (`Menu UI` & quick toggle)
   - [x] Full calibration navigation workflows for FWD, REF, and RAD channels
+  - [x] Dedicated Protection configuration menu (`Protections`)
+  - [x] On-screen high-priority trip alert with single-button emergency reset
 - [x] **Interactive In-System Calibration & Storage**
   - [x] Dynamic calibration point management (Add Point, Edit Point, Remove Point, View Points)
   - [x] Dynamic capacity up to 10 points per channel with minimum 2-point safety guard
@@ -54,11 +57,14 @@ A high-performance embedded firmware and hardware project for an RF Standing Wav
   - [x] Automatic monotonic table sorting upon calibration point updates
   - [x] Flash non-volatile persistence (Sector 5 storage HAL with checksum verification)
   - [x] Calibration point table inspection view (`View Points`) and factory default reset
-- [ ] **Hardware Protection & Safety (Relay & Buzzer)**
-  - [ ] High-SWR protection relay trigger (disconnect transmitter / PTT line when SWR exceeds safety limit, e.g. $\text{SWR} > 3.0$)
-  - [ ] Optocoupler-isolated relay latching and fault lockout logic
-  - [ ] Audible alarm tone via active buzzer on high SWR or over-power condition
-  - [ ] On-screen fault warning message with manual/auto reset mechanisms
+- [x] **Hardware Protection & Safety (Relay Cutoff)**
+  - [x] Dual-condition protection engine evaluated on every main loop iteration (`protection.c`)
+  - [x] Trigger 1: RAD over-power cutoff (1 to 50W, 1W step from 1-10W, 5W step from 10-50W)
+  - [x] Trigger 2: High-SWR cutoff (1.1 to 5.0 in 0.1 increments, with transmit presence gating)
+  - [x] Optocoupler de-energization (PB2 low) driving relay from NO to NC to isolate RF/PTT
+  - [x] Safety latching logic and manual reset via SELECT button
+  - [x] Hardware relay manual toggle test in Protection menu
+  - [x] Non-volatile persistence of protection thresholds in Flash memory
 - [x] **Custom Digital Controller PCB & Schematic (STC8)**
   - [x] Schematic capture V1.0 completed in EasyEDA ([`SCH_Schematic1_2026-09-30.pdf`](PCB%20and%20Schematic/SCH_Schematic1_2026-09-30.pdf))
   - [x] 4-Layer PCB layout completed in EasyEDA Pro (~$117.5 \times 36\,\text{mm}$)
