@@ -18,4 +18,9 @@ void lcdString(char *str);
 void lcdInt(int num);\
 // Function to display a float on the LCD
 void lcdFloat(float num);
+
+// Custom character functions
+void lcdCreateChar(uint8_t location, const uint8_t charmap[8]);
+void lcdInitCustomChars(void);
+
 #endif // !LCD_H

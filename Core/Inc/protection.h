@@ -23,6 +23,11 @@ bool protectionIsTripped(void);
 TripCause_t protectionGetTripCause(void);
 const char* protectionGetTripCauseString(void);
 
+// Enable / Disable Master Protection
+bool protectionIsEnabled(void);
+void protectionSetEnabled(bool enable);
+void protectionToggleEnabled(void);
+
 // Thresholds and stepping helpers
 uint16_t protectionGetRadLimit(void);
 void protectionSetRadLimit(uint16_t watts);

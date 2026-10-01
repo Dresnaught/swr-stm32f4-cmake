@@ -16,4 +16,10 @@ bool buttonJustPressed(uint8_t button);
 // Repeat trigger: returns true on first press, and repeats periodically if held
 bool buttonRepeat(uint8_t button);
 
+// Hold trigger: returns true once when held continuously for at least holdMs
+bool buttonLongHold(uint8_t button, uint32_t holdMs);
+
+// Short release trigger: returns true on release if pressed and released before holdMs
+bool buttonShortRelease(uint8_t button);
+
 #endif // BUTTON_H

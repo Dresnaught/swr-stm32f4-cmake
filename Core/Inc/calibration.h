@@ -30,11 +30,19 @@ typedef struct {
   CalPoint_t points[CAL_MAX_POINTS];
 } CalChannel_t;
 
+typedef enum {
+  BAR_STYLE_OFF = 0,    // 0: Off (Row 1 shows clean text: REF: %4uW or RAD: %4uW)
+  BAR_STYLE_SCALE,      // 1: Scale bar: ''''|<-half ''''|<-full
+  BAR_STYLE_PIPES,      // 2: Continuous bar: ||||| per pixel
+  BAR_STYLE_COUNT
+} PowerBarStyle_t;
+
 typedef struct {
   uint16_t radLimitWatts; // 1 to 50W (default: 15W)
   uint16_t swrLimitX100;  // 110 to 500 (default: 200 for 2.0 SWR)
   uint16_t enabled;       // 1 = enabled, 0 = disabled
-  uint16_t reserved;
+  uint8_t barStyle;       // Power bar style (PowerBarStyle_t)
+  uint8_t runningTextEnabled; // 1 = Running text marquee enabled in standby, 0 = disabled
 } ProtectionSettings_t;
 
 typedef struct {
@@ -60,6 +68,7 @@ uint16_t calInterpolate(CalChannelType ch, uint16_t rawInput);
 bool calAddPoint(CalChannelType ch, uint16_t targetWatt, uint16_t rawADC);
 bool calUpdatePoint(CalChannelType ch, uint8_t pointIndex, uint16_t targetWatt, uint16_t rawADC);
 bool calRemovePoint(CalChannelType ch, uint8_t pointIndex);
+bool calRemoveAllPoints(CalChannelType ch);
 void calSortPoints(CalChannelType ch);
 uint8_t calGetPointCount(CalChannelType ch);
 

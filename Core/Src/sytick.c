@@ -1,5 +1,6 @@
 #include "sytick.h"
 #include "stm32f401xc.h"
+#include "watchdog.h"
 
 // (track how many time the MCU ran) by milliseconds
 volatile uint32_t now = 0;
@@ -22,6 +23,7 @@ __attribute__((used)) void SysTick_Handler(void) {
 void delay_ms(uint32_t ms) {
   uint32_t delay = now;
   while ((now - delay) < ms) {
+    watchdogRefresh();
     __NOP();
   }
 }

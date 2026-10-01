@@ -60,7 +60,26 @@ const char* protectionGetTripCauseString(void) {
   }
 }
 
+bool protectionIsEnabled(void) {
+  return activeCal.protection.enabled != 0;
+}
+
+void protectionSetEnabled(bool enable) {
+  activeCal.protection.enabled = enable ? 1 : 0;
+  if (!enable) {
+    protectionReset();
+  }
+}
+
+void protectionToggleEnabled(void) {
+  protectionSetEnabled(!protectionIsEnabled());
+}
+
 void protectionCheck(uint16_t fwdWatts, uint16_t radWatts, uint16_t swrX100) {
+  if (!protectionIsEnabled()) {
+    protectionSet(true);
+    return;
+  }
   if (isTripped) {
     // Latched off until reset
     protectionSet(false);
@@ -99,20 +118,19 @@ uint16_t protectionGetRadLimit(void) {
 
 void protectionSetRadLimit(uint16_t watts) {
   if (watts > 50) watts = 50;
-  if (watts < 1) watts = 1;
   activeCal.protection.radLimitWatts = watts;
 }
 
-// Stepping: 1-2-3...10 by 1, then 10-15-20...50 by 5
+// Stepping: OFF(0) -> 1-2-3...10 by 1, then 10-15-20...50 by 5
 uint16_t stepRadLimitUp(uint16_t current) {
-  if (current < 1) return 1;
+  if (current == 0) return 1;
   if (current < 10) return current + 1;
   if (current < 50) return current + 5;
   return 50;
 }
 
 uint16_t stepRadLimitDown(uint16_t current) {
-  if (current <= 1) return 1;
+  if (current <= 1) return 0; // Turn OFF
   if (current <= 10) return current - 1;
   return current - 5;
 }
@@ -123,19 +141,19 @@ uint16_t protectionGetSwrLimit(void) {
 
 void protectionSetSwrLimit(uint16_t swrX100) {
   if (swrX100 > 500) swrX100 = 500;
-  if (swrX100 < 110) swrX100 = 110;
   activeCal.protection.swrLimitX100 = swrX100;
 }
 
-// Stepping: 1.1 to 5.0 by 0.1 (110 to 500 by 10)
+// Stepping: OFF(0) -> 1.1 to 5.0 by 0.1 (110 to 500 by 10)
 uint16_t stepSwrLimitUp(uint16_t current) {
+  if (current == 0) return 110;
   if (current < 110) return 110;
   if (current + 10 <= 500) return current + 10;
   return 500;
 }
 
 uint16_t stepSwrLimitDown(uint16_t current) {
-  if (current <= 110) return 110;
+  if (current <= 110) return 0; // Turn OFF
   return current - 10;
 }
 

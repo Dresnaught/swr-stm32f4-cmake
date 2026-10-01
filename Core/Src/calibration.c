@@ -72,7 +72,8 @@ void calResetDefaults(void) {
   activeCal.protection.radLimitWatts = 15; // 15W default trip for Radio-In
   activeCal.protection.swrLimitX100 = 200; // 2.00 default trip for SWR
   activeCal.protection.enabled = 1;
-  activeCal.protection.reserved = 0;
+  activeCal.protection.barStyle = BAR_STYLE_SCALE; // Default to Custom Pixel Scale
+  activeCal.protection.runningTextEnabled = 1;     // Default: Running text marquee enabled in standby
 
   activeCal.checksum = calCalculateChecksum(&activeCal);
 }
@@ -110,13 +111,16 @@ bool calLoadFromFlash(void) {
 
   // Validate point counts
   for (int i = 0; i < CAL_CH_COUNT; i++) {
-    if (loaded.channels[i].count < CAL_MIN_POINTS || loaded.channels[i].count > CAL_MAX_POINTS) {
+    if (loaded.channels[i].count > CAL_MAX_POINTS) {
       return false;
     }
   }
 
   // Loaded successfully
   memcpy(&activeCal, &loaded, sizeof(CalConfig_t));
+  if (activeCal.protection.runningTextEnabled > 1) {
+    activeCal.protection.runningTextEnabled = 1;
+  }
   return true;
 }
 
@@ -164,10 +168,20 @@ void calSortPoints(CalChannelType ch) {
 bool calAddPoint(CalChannelType ch, uint16_t targetWatt, uint16_t rawADC) {
   if (ch >= CAL_CH_COUNT) return false;
   CalChannel_t *c = &activeCal.channels[ch];
-  if (c->count >= CAL_MAX_POINTS) return false; // Channel full
 
   if (targetWatt > c->maxWatts) targetWatt = c->maxWatts;
   if (rawADC > 4095) rawADC = 4095;
+
+  // If a point with this exact target watt already exists, recalibrate that point!
+  for (uint8_t i = 0; i < c->count; i++) {
+    if (c->points[i].value == targetWatt) {
+      c->points[i].raw = rawADC;
+      calSortPoints(ch);
+      return true;
+    }
+  }
+
+  if (c->count >= CAL_MAX_POINTS) return false; // Channel full
 
   uint8_t idx = c->count;
   c->points[idx].raw = rawADC;
@@ -194,7 +208,7 @@ bool calUpdatePoint(CalChannelType ch, uint8_t pointIndex, uint16_t targetWatt, 
 bool calRemovePoint(CalChannelType ch, uint8_t pointIndex) {
   if (ch >= CAL_CH_COUNT) return false;
   CalChannel_t *c = &activeCal.channels[ch];
-  if (c->count <= CAL_MIN_POINTS) return false; // Must keep at least 2 points
+  if (c->count == 0) return false;
   if (pointIndex >= c->count) return false;
 
   for (uint8_t i = pointIndex; i < c->count - 1; i++) {
@@ -203,6 +217,14 @@ bool calRemovePoint(CalChannelType ch, uint8_t pointIndex) {
   c->points[c->count - 1].raw = 0;
   c->points[c->count - 1].value = 0;
   c->count--;
+  return true;
+}
+
+bool calRemoveAllPoints(CalChannelType ch) {
+  if (ch >= CAL_CH_COUNT) return false;
+  CalChannel_t *c = &activeCal.channels[ch];
+  c->count = 0;
+  memset(c->points, 0, sizeof(c->points));
   return true;
 }
 

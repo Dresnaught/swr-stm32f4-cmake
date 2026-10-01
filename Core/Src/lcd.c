@@ -147,6 +147,70 @@ void lcd_init(void) {
   delay_ms(1);
   lcd_send_cmd(0x0C); // display ON, cursor OFF
   delay_ms(1);
+
+  lcdInitCustomChars();
+}
+
+void lcdCreateChar(uint8_t location, const uint8_t charmap[8]) {
+  location &= 0x07;
+  lcd_send_cmd(0x40 | (location << 3));
+  for (int i = 0; i < 8; i++) {
+    lcd_send_data(charmap[i]);
+  }
+}
+
+void lcdInitCustomChars(void) {
+  // 0: Initial tip character for scale bar (centered full line)
+  static const uint8_t char_tip_init[8] = {
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04
+  };
+
+  // 1: 1 vertical line (column 0)
+  static const uint8_t char_1_line[8] = {
+    0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10
+  };
+
+  // 2: 2 vertical lines (columns 0, 1)
+  static const uint8_t char_2_lines[8] = {
+    0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18
+  };
+
+  // 3: 3 vertical lines (columns 0, 1, 2)
+  static const uint8_t char_3_lines[8] = {
+    0x1C, 0x1C, 0x1C, 0x1C, 0x1C, 0x1C, 0x1C, 0x1C
+  };
+
+  // 4: 4 vertical lines (columns 0, 1, 2, 3)
+  static const uint8_t char_4_lines[8] = {
+    0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E
+  };
+
+  // 5: 5 vertical lines (columns 0, 1, 2, 3, 4: |||||)
+  static const uint8_t char_5_lines[8] = {
+    0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F
+  };
+
+  // 6: Scale Even Cell (ticks at 1, 3 with 1-pixel uniform spacing)
+  static const uint8_t char_scale_even[8] = {
+    0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  };
+
+  // 7: Scale Odd Cell (ticks at 0, 2; half-line at 4 with 1-pixel uniform spacing)
+  static const uint8_t char_scale_odd[8] = {
+    0x15, 0x15, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00
+  };
+
+  lcdCreateChar(0, char_tip_init);
+  lcdCreateChar(1, char_1_line);
+  lcdCreateChar(2, char_2_lines);
+  lcdCreateChar(3, char_3_lines);
+  lcdCreateChar(4, char_4_lines);
+  lcdCreateChar(5, char_5_lines);
+  lcdCreateChar(6, char_scale_even);
+  lcdCreateChar(7, char_scale_odd);
+
+  // Return LCD to DDRAM mode
+  lcdCursor(0, 0);
 }
 
 void lcdCursor(int row, int col) {

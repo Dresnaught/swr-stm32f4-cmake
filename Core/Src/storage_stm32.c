@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "stm32f401xc.h"
+#include "watchdog.h"
 #include <string.h>
 
 #define FLASH_STORAGE_BASE  0x08020000U // Sector 5 start address on STM32F401xC
@@ -20,6 +21,7 @@ static void flashLock(void) {
 
 static void flashWaitBusy(void) {
   while (FLASH->SR & FLASH_SR_BSY) {
+    watchdogRefresh();
     __NOP();
   }
 }
@@ -36,6 +38,7 @@ bool storageRead(uint32_t offset, void *buffer, size_t size) {
 }
 
 bool storageErase(void) {
+  watchdogRefresh();
   flashUnlock();
   flashWaitBusy();
 
@@ -61,6 +64,7 @@ bool storageWrite(uint32_t offset, const void *data, size_t size) {
   // First erase the sector before reprogramming
   if (!storageErase()) return false;
 
+  watchdogRefresh();
   flashUnlock();
   flashWaitBusy();
 

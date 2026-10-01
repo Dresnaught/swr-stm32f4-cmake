@@ -2,11 +2,12 @@
 #include "lcd.h"
 #include "conversion.h"
 #include "calibration.h"
+#include "protection.h"
 #include "button.h"
 #include "sytick.h"
 #include "adc.h"
-#include "protection.h"
 #include <stdio.h>
+#include <string.h>
 
 MenuState currentMenu = MAIN_SCREEN;
 bool UIState = false; // false = REF display, true = RAD (Radio-In) display
@@ -14,22 +15,25 @@ bool UIState = false; // false = REF display, true = RAD (Radio-In) display
 uint16_t lastCalibratedFWD = 0;
 uint16_t lastCalibratedREF = 0;
 uint16_t lastCalibratedRAD = 0;
+uint16_t lastCalculatedSWRValue = 100;
 float lastCalculatedSWRFloatValue = 1.0f;
 
 static uint8_t buttonMenuIndex = 0;
 
 // Calibration sub-state machine
 typedef enum {
-  CAL_STEP_MENU,            // Action selection
-  CAL_STEP_PICK_POINT,      // Pick point to edit
-  CAL_STEP_SET_WATT,        // Set target wattage
-  CAL_STEP_PROMPT_RF,       // Ready prompt before sampling
-  CAL_STEP_SAMPLING,        // Active 5-second sampling
-  CAL_STEP_SAMPLE_DONE,     // Show result after sampling
-  CAL_STEP_REMOVE_PICK,     // Pick point to remove
-  CAL_STEP_REMOVE_CONFIRM,  // Confirm deletion
-  CAL_STEP_VIEW_POINTS,     // Browse active calibration points
-  CAL_STEP_STATUS_MSG       // Confirmation / alert message
+  CAL_STEP_MENU,                // Action selection
+  CAL_STEP_PICK_POINT,          // Pick point to edit
+  CAL_STEP_SET_WATT,            // Set target wattage
+  CAL_STEP_PROMPT_RF,           // Ready prompt before sampling
+  CAL_STEP_SAMPLING,            // Active 5-second sampling
+  CAL_STEP_SAMPLE_DONE,         // Show result after sampling
+  CAL_STEP_REMOVE_PICK,         // Pick point to remove
+  CAL_STEP_REMOVE_CONFIRM,      // Confirm single deletion
+  CAL_STEP_REMOVE_ALL_CONFIRM,  // Confirm removing all points
+  CAL_STEP_VIEW_POINTS,         // Browse active calibration points
+  CAL_STEP_STATUS_MSG,          // Confirmation / alert message
+  CAL_STEP_SAVE_PROMPT          // Prompt "Save config? >OK NO"
 } CalStepState;
 
 static CalStepState calStep = CAL_STEP_MENU;
@@ -45,19 +49,233 @@ static uint16_t calSampledAvgAdc = 0;
 static uint8_t calViewPointIndex = 0;
 static const char *calStatusMsgLine0 = "";
 static const char *calStatusMsgLine1 = "";
+static bool calHasUnsavedChanges = false;
+static uint8_t savePromptChoice = 0; // 0 = >OK  NO, 1 =  OK >NO
+static bool hasUnsavedConfig = false;
+
+typedef enum {
+  MM_ACTION_SAVE_CONFIG,
+  MM_ACTION_CAL_FWD,
+  MM_ACTION_CAL_REF,
+  MM_ACTION_CAL_RAD,
+  MM_ACTION_PROTECTIONS,
+  MM_ACTION_DISPLAY_MODE,
+  MM_ACTION_RUNNING_TEXT,
+  MM_ACTION_BACK_MAIN
+} MainMenuAction_t;
+
+static MainMenuAction_t getMainMenuAction(uint8_t index, bool hasUnsaved) {
+  if (hasUnsaved) {
+    switch (index) {
+      case 0: return MM_ACTION_SAVE_CONFIG;
+      case 1: return MM_ACTION_CAL_FWD;
+      case 2: return MM_ACTION_CAL_REF;
+      case 3: return MM_ACTION_CAL_RAD;
+      case 4: return MM_ACTION_PROTECTIONS;
+      case 5: return MM_ACTION_DISPLAY_MODE;
+      case 6: return MM_ACTION_RUNNING_TEXT;
+      default: return MM_ACTION_BACK_MAIN;
+    }
+  } else {
+    switch (index) {
+      case 0: return MM_ACTION_CAL_FWD;
+      case 1: return MM_ACTION_CAL_REF;
+      case 2: return MM_ACTION_CAL_RAD;
+      case 3: return MM_ACTION_PROTECTIONS;
+      case 4: return MM_ACTION_DISPLAY_MODE;
+      case 5: return MM_ACTION_RUNNING_TEXT;
+      default: return MM_ACTION_BACK_MAIN;
+    }
+  }
+}
+
+static uint8_t getMainMenuIndexForAction(MainMenuAction_t act, bool hasUnsaved) {
+  if (hasUnsaved) {
+    switch (act) {
+      case MM_ACTION_SAVE_CONFIG:  return 0;
+      case MM_ACTION_CAL_FWD:      return 1;
+      case MM_ACTION_CAL_REF:      return 2;
+      case MM_ACTION_CAL_RAD:      return 3;
+      case MM_ACTION_PROTECTIONS:  return 4;
+      case MM_ACTION_DISPLAY_MODE: return 5;
+      case MM_ACTION_RUNNING_TEXT: return 6;
+      default:                     return 7;
+    }
+  } else {
+    switch (act) {
+      case MM_ACTION_CAL_FWD:      return 0;
+      case MM_ACTION_CAL_REF:      return 1;
+      case MM_ACTION_CAL_RAD:      return 2;
+      case MM_ACTION_PROTECTIONS:  return 3;
+      case MM_ACTION_DISPLAY_MODE: return 4;
+      case MM_ACTION_RUNNING_TEXT: return 5;
+      default:                     return 6;
+    }
+  }
+}
+
+// Screen saver / running text state
+static char runningTextBuffer[160];
+static size_t runningTextLen = 0;
+static uint16_t runningTextScrollIdx = 0;
+static uint32_t lastScrollTime = 0;
+static uint32_t lastActivityTime = 0;
+static bool inScreenSaver = false;
+
+void updateRunningText(void) {
+  uint16_t fwdMax = calGetChannelMaxWatts(CAL_CH_FWD);
+  uint16_t refMax = fwdMax / 10;
+  uint16_t radMax = calGetChannelMaxWatts(CAL_CH_RAD);
+
+  snprintf(runningTextBuffer, sizeof(runningTextBuffer),
+           "  *** DIGITAL SWR & PWR METER *** MAX FWD:%uW  REF:%uW  RAD:%uW *** PROTECTION:%s ***  ",
+           fwdMax, refMax, radMax,
+           protectionIsEnabled() ? "ON" : "OFF");
+  runningTextLen = strlen(runningTextBuffer);
+  if (runningTextLen == 0) {
+    runningTextBuffer[0] = ' ';
+    runningTextBuffer[1] = '\0';
+    runningTextLen = 1;
+  }
+}
 
 static const char *calActionItems[] = {
-  "1. Add Point",
-  "2. Edit Point",
-  "3. Remove Point",
-  "4. View Points",
-  "5. Save to Flash",
-  "6. Reset Def",
-  "7. Back"
+  "1.Add Point",
+  "2.Edit Point",
+  "3.Remove Point",
+  "4.View Points",
+  "5.Save Flash",
+  "6.Reset Def",
+  "7.Back"
 };
 #define CAL_ACTION_COUNT 7
 
-// Helper to write a padded line to the 1602 LCD
+// Protection sub-state machine
+typedef enum {
+  PROT_STEP_MENU,
+  PROT_STEP_SET_RAD,
+  PROT_STEP_SET_SWR,
+  PROT_STEP_STATUS
+} ProtStepState;
+
+static ProtStepState protStep = PROT_STEP_MENU;
+static uint8_t protMenuIndex = 0;
+static const char *protStatusLine0 = "";
+static const char *protStatusLine1 = "";
+
+static uint8_t mainScreenView = 0; // 0 = default (Bar or REF), 1 = REF, 2 = RAD
+
+static const char *barStyleNames[BAR_STYLE_COUNT] = {
+  "1.Bar: Off    ",
+  "2.Bar: Scale  ",
+  "3.Bar: Pipes  "
+};
+
+static void renderPowerBar(char *outBuf16, uint16_t currentWatts, uint16_t maxWatts, uint8_t style) {
+  if (maxWatts == 0) maxWatts = 1000;
+  if (currentWatts > maxWatts) currentWatts = maxWatts;
+
+  // 1. If FWD is 0: show nothing on cursor 1,0 (all spaces)
+  if (currentWatts == 0) {
+    for (uint8_t i = 0; i < 16; i++) {
+      outBuf16[i] = ' ';
+    }
+    outBuf16[16] = '\0';
+    return;
+  }
+
+  // Calculate pixel count across 80 horizontal dots (16 chars * 5 dots)
+  uint8_t totalPixels = (uint8_t)(((uint32_t)currentWatts * 80U + (maxWatts / 2)) / maxWatts);
+  if (totalPixels == 0) totalPixels = 1;
+  if (totalPixels > 80) totalPixels = 80;
+
+  if (style == BAR_STYLE_SCALE) {
+    // 80-pixel scale bar:
+    // Every 10 pixels is: 4 ticks (with 1-pixel uniform spacing) and a line
+    // Even cell (pixels 0..4): ticks at sub-columns 1, 3
+    // Odd cell (pixels 5..9): ticks at sub-columns 0, 2; half-line at sub-column 4
+    // At the tip (current reading position), the line is ALWAYS full-height (<-full / <-long)
+    // Intermediate lines are half-height (<-half)
+    // Beyond the tip: empty spaces
+    uint8_t tipPixel = totalPixels - 1; // 0..79
+    uint8_t tipCol = tipPixel / 5;      // 0..15 (character index)
+    uint8_t tipSubCol = tipPixel % 5;   // 0..4  (sub-column dot within cell)
+    bool isOdd = (tipCol % 2 != 0);
+
+    // Build dynamic tip pattern for CGRAM location 0
+    uint8_t tipPattern[8] = {0};
+
+    // Sub-columns before the tip in this cell
+    for (uint8_t s = 0; s < tipSubCol; s++) {
+      if (!isOdd) {
+        // Even cell: ticks at sub-columns 1, 3 (2 pixels high at top)
+        if (s == 1 || s == 3) {
+          tipPattern[0] |= (1 << (4 - s));
+          tipPattern[1] |= (1 << (4 - s));
+        }
+      } else {
+        // Odd cell: ticks at sub-columns 0, 2; half-line at sub-column 4
+        if (s == 0 || s == 2) {
+          tipPattern[0] |= (1 << (4 - s));
+          tipPattern[1] |= (1 << (4 - s));
+        } else if (s == 4) {
+          for (uint8_t r = 0; r < 5; r++) {
+            tipPattern[r] |= (1 << (4 - s));
+          }
+        }
+      }
+    }
+
+    // At the tip itself: ALWAYS a full-height line!
+    for (uint8_t r = 0; r < 8; r++) {
+      tipPattern[r] |= (1 << (4 - tipSubCol));
+    }
+
+    // Only update CGRAM if the tip pattern actually changed
+    static uint8_t lastTipPattern[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    if (memcmp(lastTipPattern, tipPattern, 8) != 0) {
+      memcpy(lastTipPattern, tipPattern, 8);
+      lcdCreateChar(0, tipPattern);
+    }
+
+    for (uint8_t col = 0; col < 16; col++) {
+      if (col < tipCol) {
+        outBuf16[col] = (col % 2 == 0) ? '\x06' : '\x07';
+      } else if (col == tipCol) {
+        outBuf16[col] = '\x08'; // CGRAM location 0
+      } else {
+        outBuf16[col] = ' ';
+      }
+    }
+    outBuf16[16] = '\0';
+    return;
+  }
+
+  if (style == BAR_STYLE_PIPES) {
+    // Continuous per-pixel bar using 5 vertical lines: |||||
+    for (uint8_t col = 0; col < 16; col++) {
+      uint8_t colStart = col * 5;
+      if (totalPixels >= colStart + 5) {
+        outBuf16[col] = '\x05'; // Full 5 lines (|||||)
+      } else if (totalPixels > colStart) {
+        uint8_t rem = totalPixels - colStart; // 1 to 4 lines
+        outBuf16[col] = (char)rem; // Char 1..4 (\x01..\x04)
+      } else {
+        outBuf16[col] = ' ';
+      }
+    }
+    outBuf16[16] = '\0';
+    return;
+  }
+
+  // BAR_STYLE_OFF: empty
+  for (uint8_t i = 0; i < 16; i++) {
+    outBuf16[i] = ' ';
+  }
+  outBuf16[16] = '\0';
+}
+
+// Helper to write a padded 16-character line to the 1602 LCD
 static void lcdPrintRow(int row, const char *text) {
   lcdCursor(row, 0);
   int count = 0;
@@ -71,32 +289,104 @@ static void lcdPrintRow(int row, const char *text) {
   }
 }
 
+// 2-Row Compact Menu Renderer for 1602 LCD
+static void lcdRender2RowMenu(const char *items[], uint8_t count, uint8_t selectedIndex) {
+  uint8_t topIndex = (selectedIndex / 2) * 2;
+  uint8_t bottomIndex = topIndex + 1;
+
+  char row0[20];
+  char row1[20];
+
+  if (topIndex < count) {
+    snprintf(row0, sizeof(row0), "%c%s", (selectedIndex == topIndex) ? '>' : ' ', items[topIndex]);
+  } else {
+    row0[0] = '\0';
+  }
+  lcdPrintRow(0, row0);
+
+  if (bottomIndex < count) {
+    snprintf(row1, sizeof(row1), "%c%s", (selectedIndex == bottomIndex) ? '>' : ' ', items[bottomIndex]);
+  } else {
+    row1[0] = '\0';
+  }
+  lcdPrintRow(1, row1);
+}
+
 bool updateReadings(void) {
-  // Always update menu while navigating or calibrating
   if (currentMenu != MAIN_SCREEN) {
+    lastActivityTime = now;
     return true;
   }
 
-  uint16_t newCalibratedFWD = calibratedFWD;
-  uint16_t newCalibratedREF = calibratedREF;
-  uint16_t newCalibratedRAD = calibratedRAD;
-  float newCalculatedSWRFloatValue = calculatedSWRFloatValue;
+  // Fast-track user button interactions for immediate UI response
+  if (buttonRead(13) || buttonRead(14) || buttonRead(15)) {
+    return true;
+  }
 
+  // Fast-track protection trip status changes
+  static bool lastTripped = false;
+  bool nowTripped = protectionIsTripped();
+  if (nowTripped != lastTripped) {
+    lastTripped = nowTripped;
+    lastActivityTime = now;
+    if (inScreenSaver) {
+      inScreenSaver = false;
+    }
+    return true;
+  }
+
+  // Active RF power check:
+  // If user is transmitting (FWD > 1W or RAD > 1W), update activity time and wake up from standby
+  if (calibratedFWD > 1 || calibratedRAD > 1) {
+    lastActivityTime = now;
+    if (inScreenSaver) {
+      inScreenSaver = false;
+      return true;
+    }
+  }
+
+  // Live RF power changes with smooth 180ms throttle (~5.5 Hz LCD refresh)
+  // Perfectly matched to HD44780 LCD response time for crystal-clear, readable digits without jitter
+  if (!inScreenSaver) {
+    if (calibratedFWD != lastCalibratedFWD || 
+        calibratedREF != lastCalibratedREF || 
+        calibratedRAD != lastCalibratedRAD) {
+      static uint32_t lastPowerUpdate = 0;
+      if ((now - lastPowerUpdate) >= 180) {
+        lastPowerUpdate = now;
+        lastCalibratedFWD = calibratedFWD;
+        lastCalibratedREF = calibratedREF;
+        lastCalibratedRAD = calibratedRAD;
+        lastCalculatedSWRValue = calculatedSWRValue;
+        lastCalculatedSWRFloatValue = calculatedSWRFloatValue;
+        return true;
+      }
+    }
+  }
+
+  // Screen saver marquee scrolling refresh
+  if (inScreenSaver) {
+    if ((now - lastScrollTime) >= SCREEN_SAVER_SCROLL_MS) {
+      return true;
+    }
+    return false;
+  }
+
+  // Screen saver inactivity timer trigger (30 seconds)
+  if (lastActivityTime == 0) lastActivityTime = now;
+  if (activeCal.protection.runningTextEnabled && (now - lastActivityTime >= SCREEN_SAVER_TIMEOUT_MS)) {
+    return true;
+  }
+
+  // Periodic main screen refresh (180ms = ~5.5 Hz)
   static uint32_t lastRefresh = 0;
-  bool periodicTick = (now - lastRefresh) >= 150;
-
-  if (newCalibratedFWD != lastCalibratedFWD ||
-      newCalibratedREF != lastCalibratedREF ||
-      newCalibratedRAD != lastCalibratedRAD ||
-      newCalculatedSWRFloatValue != lastCalculatedSWRFloatValue ||
-      buttonRead(13) || buttonRead(14) || buttonRead(15) ||
-      periodicTick) {
-
+  if ((now - lastRefresh) >= 180) {
     lastRefresh = now;
-    lastCalibratedFWD = newCalibratedFWD;
-    lastCalibratedREF = newCalibratedREF;
-    lastCalibratedRAD = newCalibratedRAD;
-    lastCalculatedSWRFloatValue = newCalculatedSWRFloatValue;
+    lastCalibratedFWD = calibratedFWD;
+    lastCalibratedREF = calibratedREF;
+    lastCalibratedRAD = calibratedRAD;
+    lastCalculatedSWRValue = calculatedSWRValue;
+    lastCalculatedSWRFloatValue = calculatedSWRFloatValue;
     return true;
   }
 
@@ -125,16 +415,13 @@ void calibrationMenu(CalChannelType ch) {
 
   switch (calStep) {
     case CAL_STEP_MENU: {
-      snprintf(line0, sizeof(line0), "Cal %s (%uW)", chName, maxW);
-      snprintf(line1, sizeof(line1), "> %s", calActionItems[calMenuActionIndex]);
-      lcdPrintRow(0, line0);
-      lcdPrintRow(1, line1);
+      lcdRender2RowMenu(calActionItems, CAL_ACTION_COUNT, calMenuActionIndex);
 
       if (buttonJustPressed(13)) {
         calMenuActionIndex = (calMenuActionIndex + 1) % CAL_ACTION_COUNT;
       } else if (buttonJustPressed(15)) {
         calMenuActionIndex = (calMenuActionIndex + CAL_ACTION_COUNT - 1) % CAL_ACTION_COUNT;
-      } else if (buttonJustPressed(14)) {
+      } else if (buttonShortRelease(14)) {
         switch (calMenuActionIndex) {
           case 0: // 1. Add Point
             if (count >= CAL_MAX_POINTS) {
@@ -171,8 +458,13 @@ void calibrationMenu(CalChannelType ch) {
             calStep = CAL_STEP_VIEW_POINTS;
             break;
 
-          case 4: // 5. Save to Flash
+          case 4: // 5. Save Flash
+            lcdPrintRow(0, "Saving Config...");
+            lcdPrintRow(1, "Do Not Power Off");
+            delay_ms(350);
             if (calSaveToFlash()) {
+              calHasUnsavedChanges = false;
+              hasUnsavedConfig = false;
               calStatusMsgLine0 = "Flash Storage";
               calStatusMsgLine1 = "Saved to Flash!";
             } else {
@@ -184,14 +476,24 @@ void calibrationMenu(CalChannelType ch) {
 
           case 5: // 6. Reset Def
             calResetDefaults();
+            calHasUnsavedChanges = true;
+            hasUnsavedConfig = true;
             calStatusMsgLine0 = "Factory Reset";
             calStatusMsgLine1 = "Defaults Loaded!";
             calStep = CAL_STEP_STATUS_MSG;
             break;
 
           case 6: // 7. Back
-            currentMenu = MAIN_MENU;
-            calStep = CAL_STEP_MENU;
+            if (calHasUnsavedChanges) {
+              savePromptChoice = 0; // Default to >OK  NO
+              calStep = CAL_STEP_SAVE_PROMPT;
+            } else {
+              MainMenuAction_t act = (ch == CAL_CH_FWD) ? MM_ACTION_CAL_FWD :
+                                     (ch == CAL_CH_REF) ? MM_ACTION_CAL_REF : MM_ACTION_CAL_RAD;
+              buttonMenuIndex = getMainMenuIndexForAction(act, hasUnsavedConfig);
+              currentMenu = MAIN_MENU;
+              calStep = CAL_STEP_MENU;
+            }
             break;
         }
       }
@@ -200,22 +502,32 @@ void calibrationMenu(CalChannelType ch) {
 
     case CAL_STEP_PICK_POINT: {
       snprintf(line0, sizeof(line0), "%s: Edit Point", chName);
-      snprintf(line1, sizeof(line1), "Point %u/%u: %4uW", 
-               calSelectedPoint + 1, count, 
-               activeCal.channels[ch].points[calSelectedPoint].value);
+      if (calSelectedPoint < count) {
+        snprintf(line1, sizeof(line1), "Pt %u/%u: %4uW", 
+                 calSelectedPoint + 1, count, 
+                 activeCal.channels[ch].points[calSelectedPoint].value);
+      } else {
+        snprintf(line1, sizeof(line1), "< Back to Menu >");
+      }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonJustPressed(13)) {
-        calSelectedPoint = (calSelectedPoint + 1) % count;
+        calSelectedPoint = (calSelectedPoint + 1) % (count + 1);
       } else if (buttonJustPressed(15)) {
-        calSelectedPoint = (calSelectedPoint + count - 1) % count;
-      } else if (buttonJustPressed(14)) {
-        calTargetWatt = activeCal.channels[ch].points[calSelectedPoint].value;
-        if (calTargetWatt == 0 && calSelectedPoint > 0) {
-          calTargetWatt = getSmartWattStep(maxW, 0);
+        calSelectedPoint = (calSelectedPoint + count) % (count + 1);
+      } else if (buttonLongHold(14, 500)) { // Hold SELECT to go back immediately
+        calStep = CAL_STEP_MENU;
+      } else if (buttonShortRelease(14)) {
+        if (calSelectedPoint == count) {
+          calStep = CAL_STEP_MENU;
+        } else {
+          calTargetWatt = activeCal.channels[ch].points[calSelectedPoint].value;
+          if (calTargetWatt == 0 && calSelectedPoint > 0) {
+            calTargetWatt = getSmartWattStep(maxW, 0);
+          }
+          calStep = CAL_STEP_SET_WATT;
         }
-        calStep = CAL_STEP_SET_WATT;
       }
       break;
     }
@@ -227,7 +539,7 @@ void calibrationMenu(CalChannelType ch) {
       } else {
         snprintf(line0, sizeof(line0), "Pt %u Target Pwr", calSelectedPoint + 1);
       }
-      snprintf(line1, sizeof(line1), "Watt: [ %4u ] W", calTargetWatt);
+      snprintf(line1, sizeof(line1), "[%4uW] Hold:Bk", calTargetWatt);
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
@@ -243,7 +555,9 @@ void calibrationMenu(CalChannelType ch) {
         } else {
           calTargetWatt = 0;
         }
-      } else if (buttonJustPressed(14)) { // SELECT
+      } else if (buttonLongHold(14, 500)) { // Hold SELECT to go back immediately!
+        calStep = CAL_STEP_MENU;
+      } else if (buttonShortRelease(14)) { // Short release confirms watt!
         calStep = CAL_STEP_PROMPT_RF;
       }
       break;
@@ -251,18 +565,18 @@ void calibrationMenu(CalChannelType ch) {
 
     case CAL_STEP_PROMPT_RF: {
       snprintf(line0, sizeof(line0), "Apply %uW RF", calTargetWatt);
-      snprintf(line1, sizeof(line1), "SEL: Start (%us)", CAL_SAMPLE_SECONDS);
+      snprintf(line1, sizeof(line1), "SEL:Run  DN:Back");
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
-      if (buttonJustPressed(14)) {
+      if (buttonLongHold(14, 500) || buttonJustPressed(15)) {
+        calStep = CAL_STEP_MENU; // Cancel / Back
+      } else if (buttonShortRelease(14)) {
         calSamplingStartTime = now;
         calAdcSum = 0;
         calAdcSampleCount = 0;
         calLastCountSec = 255;
         calStep = CAL_STEP_SAMPLING;
-      } else if (buttonJustPressed(15)) {
-        calStep = CAL_STEP_MENU; // Cancel
       }
       break;
     }
@@ -284,7 +598,7 @@ void calibrationMenu(CalChannelType ch) {
         if (secLeft != calLastCountSec) {
           calLastCountSec = secLeft;
           snprintf(line0, sizeof(line0), "Sampling %s...", chName);
-          snprintf(line1, sizeof(line1), "ADC:%4u  T:%1us", rawAdc, secLeft);
+          snprintf(line1, sizeof(line1), "ADC:%4u Time:%1us", rawAdc, secLeft);
           lcdPrintRow(0, line0);
           lcdPrintRow(1, line1);
         }
@@ -296,73 +610,145 @@ void calibrationMenu(CalChannelType ch) {
         } else {
           calUpdatePoint(ch, calSelectedPoint, calTargetWatt, calSampledAvgAdc);
         }
+        calHasUnsavedChanges = true;
+        hasUnsavedConfig = true;
         calStep = CAL_STEP_SAMPLE_DONE;
       }
       break;
     }
 
     case CAL_STEP_SAMPLE_DONE: {
-      if (isAddingNewPoint) {
-        snprintf(line0, sizeof(line0), "Pt Added! (%uW)", calTargetWatt);
-      } else {
-        snprintf(line0, sizeof(line0), "Pt %u Done! (%uW)", calSelectedPoint + 1, calTargetWatt);
-      }
-      snprintf(line1, sizeof(line1), "Avg ADC: %4u", calSampledAvgAdc);
+      snprintf(line0, sizeof(line0), "Pt Done! (%uW)", calTargetWatt);
+      snprintf(line1, sizeof(line1), "ADC:%4u (SEL:OK)", calSampledAvgAdc);
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
-      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
-        calStep = CAL_STEP_MENU;
+      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        calStep = CAL_STEP_MENU; // Goes directly back to that calibration menu!
       }
       break;
     }
 
     case CAL_STEP_REMOVE_PICK: {
-      CalPoint_t *p = &activeCal.channels[ch].points[calSelectedPoint];
-      snprintf(line0, sizeof(line0), "Remove Pt %u/%u?", calSelectedPoint + 1, count);
-      snprintf(line1, sizeof(line1), "ADC:%4u W:%4u", p->raw, p->value);
+      uint8_t totalOpts = count + 2; // points + <Remove All> + <Back>
+      if (calSelectedPoint < count) {
+        CalPoint_t *p = &activeCal.channels[ch].points[calSelectedPoint];
+        snprintf(line0, sizeof(line0), "Remove Pt %u/%u?", calSelectedPoint + 1, count);
+        snprintf(line1, sizeof(line1), "ADC:%4u W:%4u", p->raw, p->value);
+      } else if (calSelectedPoint == count) {
+        snprintf(line0, sizeof(line0), "%s: Remove Pts", chName);
+        snprintf(line1, sizeof(line1), "< Remove All >  ");
+      } else {
+        snprintf(line0, sizeof(line0), "%s: Remove Pts", chName);
+        snprintf(line1, sizeof(line1), "< Back to Menu >");
+      }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonJustPressed(13)) {
-        calSelectedPoint = (calSelectedPoint + 1) % count;
+        calSelectedPoint = (calSelectedPoint + 1) % totalOpts;
       } else if (buttonJustPressed(15)) {
-        calSelectedPoint = (calSelectedPoint + count - 1) % count;
-      } else if (buttonJustPressed(14)) {
-        calStep = CAL_STEP_REMOVE_CONFIRM;
+        calSelectedPoint = (calSelectedPoint + totalOpts - 1) % totalOpts;
+      } else if (buttonLongHold(14, 500)) { // Hold SELECT to go back immediately
+        calStep = CAL_STEP_MENU;
+      } else if (buttonShortRelease(14)) {
+        if (calSelectedPoint == count + 1) {
+          calStep = CAL_STEP_MENU;
+        } else if (calSelectedPoint == count) {
+          calStep = CAL_STEP_REMOVE_ALL_CONFIRM;
+        } else {
+          calStep = CAL_STEP_REMOVE_CONFIRM;
+        }
       }
       break;
     }
 
     case CAL_STEP_REMOVE_CONFIRM: {
       snprintf(line0, sizeof(line0), "Delete Pt %u/%u?", calSelectedPoint + 1, count);
-      snprintf(line1, sizeof(line1), "SEL=Yes  DOWN=No");
+      snprintf(line1, sizeof(line1), "SEL:Del  DN:Back");
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
-      if (buttonJustPressed(14)) { // Confirm Delete
+      if (buttonLongHold(14, 500) || buttonJustPressed(15)) { // Cancel
+        calStep = CAL_STEP_MENU;
+      } else if (buttonShortRelease(14)) { // Confirm Delete
         calRemovePoint(ch, calSelectedPoint);
+        calHasUnsavedChanges = true;
+        hasUnsavedConfig = true;
         calStatusMsgLine0 = "Point Removed!";
         calStatusMsgLine1 = "Table Updated";
         calStep = CAL_STEP_STATUS_MSG;
-      } else if (buttonJustPressed(15)) { // Cancel
+      }
+      break;
+    }
+
+    case CAL_STEP_REMOVE_ALL_CONFIRM: {
+      snprintf(line0, sizeof(line0), "Clear ALL Pts?");
+      snprintf(line1, sizeof(line1), "SEL:Yes  DN:Back");
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonLongHold(14, 500) || buttonJustPressed(15)) { // Cancel
         calStep = CAL_STEP_MENU;
+      } else if (buttonShortRelease(14)) {
+        calRemoveAllPoints(ch);
+        calHasUnsavedChanges = true;
+        hasUnsavedConfig = true;
+        calStatusMsgLine0 = "All Pts Cleared";
+        calStatusMsgLine1 = "Not saved to ROM";
+        calStep = CAL_STEP_STATUS_MSG;
       }
       break;
     }
 
     case CAL_STEP_VIEW_POINTS: {
-      CalPoint_t *p = &activeCal.channels[ch].points[calViewPointIndex];
-      snprintf(line0, sizeof(line0), "%s Pt %u/%u View", chName, calViewPointIndex + 1, count);
-      snprintf(line1, sizeof(line1), "Raw:%4u W:%4u", p->raw, p->value);
+      if (count == 0) {
+        snprintf(line0, sizeof(line0), "%s Calibration", chName);
+        snprintf(line1, sizeof(line1), "No Active Pts!");
+      } else {
+        CalPoint_t *p = &activeCal.channels[ch].points[calViewPointIndex];
+        snprintf(line0, sizeof(line0), "%s Pt %u/%u View", chName, calViewPointIndex + 1, count);
+        snprintf(line1, sizeof(line1), "Raw:%4u W:%4u", p->raw, p->value);
+      }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonJustPressed(13)) {
-        calViewPointIndex = (calViewPointIndex + 1) % count;
+        if (count > 0) calViewPointIndex = (calViewPointIndex + 1) % count;
       } else if (buttonJustPressed(15)) {
-        calViewPointIndex = (calViewPointIndex + count - 1) % count;
-      } else if (buttonJustPressed(14)) {
+        if (count > 0) calViewPointIndex = (calViewPointIndex + count - 1) % count;
+      } else if (buttonLongHold(14, 500) || buttonShortRelease(14)) {
+        calStep = CAL_STEP_MENU;
+      }
+      break;
+    }
+
+    case CAL_STEP_SAVE_PROMPT: {
+      lcdPrintRow(0, "Save config?    ");
+      if (savePromptChoice == 0) {
+        lcdPrintRow(1, ">OK  NO         ");
+      } else {
+        lcdPrintRow(1, " OK >NO         ");
+      }
+
+      if (buttonJustPressed(13) || buttonJustPressed(15)) {
+        savePromptChoice = !savePromptChoice;
+      } else if (buttonShortRelease(14)) {
+        if (savePromptChoice == 0) {
+          lcdPrintRow(0, "Saving Config...");
+          lcdPrintRow(1, "Do Not Power Off");
+          delay_ms(350);
+          calSaveToFlash(); // Save to Flash!
+          hasUnsavedConfig = false;
+        } else {
+          // Keep changes in RAM for this session, flag for Main Menu save option
+          hasUnsavedConfig = true;
+        }
+        calHasUnsavedChanges = false;
+        MainMenuAction_t act = (ch == CAL_CH_FWD) ? MM_ACTION_CAL_FWD :
+                               (ch == CAL_CH_REF) ? MM_ACTION_CAL_REF : MM_ACTION_CAL_RAD;
+        buttonMenuIndex = getMainMenuIndexForAction(act, hasUnsavedConfig);
+        currentMenu = MAIN_MENU;
         calStep = CAL_STEP_MENU;
       }
       break;
@@ -372,7 +758,7 @@ void calibrationMenu(CalChannelType ch) {
       lcdPrintRow(0, calStatusMsgLine0);
       lcdPrintRow(1, calStatusMsgLine1);
 
-      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
         calStep = CAL_STEP_MENU;
       }
       break;
@@ -380,79 +766,79 @@ void calibrationMenu(CalChannelType ch) {
   }
 }
 
-typedef enum {
-  PROT_STEP_MENU,
-  PROT_STEP_SET_RAD,
-  PROT_STEP_SET_SWR,
-  PROT_STEP_STATUS
-} ProtStepState;
-
-static ProtStepState protStep = PROT_STEP_MENU;
-static uint8_t protMenuIndex = 0;
-static const char *protStatusLine0 = "";
-static const char *protStatusLine1 = "";
-
 void protectionMenu(void) {
   char line0[32];
   char line1[32];
   uint16_t radLim = protectionGetRadLimit();
   uint16_t swrLim = protectionGetSwrLimit();
-  bool rly = protectionGetRelayState();
+  bool enabled = protectionIsEnabled();
 
   switch (protStep) {
     case PROT_STEP_MENU: {
-      snprintf(line0, sizeof(line0), "Protection Menu");
-      switch (protMenuIndex) {
-        case 0:
-          snprintf(line1, sizeof(line1), "> 1.RAD Trip:%2uW", radLim);
-          break;
-        case 1:
-          snprintf(line1, sizeof(line1), "> 2.SWR Trip:%1.1f", (double)swrLim / 100.0);
-          break;
-        case 2:
-          snprintf(line1, sizeof(line1), "> 3.Relay:%s", rly ? "ON(NC)" : "OFF(NO)");
-          break;
-        case 3:
-          snprintf(line1, sizeof(line1), "> 4.Reset Trip");
-          break;
-        case 4:
-          snprintf(line1, sizeof(line1), "> 5.Save Settings");
-          break;
-        case 5:
-          snprintf(line1, sizeof(line1), "> 6.Back");
-          break;
+      char item0[18];
+      char item1[18];
+      char item2[18];
+      const char *items[7];
+
+      snprintf(item0, sizeof(item0), "1.Prot: %s", enabled ? "ON" : "OFF");
+      if (radLim > 0) {
+        snprintf(item1, sizeof(item1), "2.RAD: %2uW", radLim);
+      } else {
+        snprintf(item1, sizeof(item1), "2.RAD: OFF");
       }
-      lcdPrintRow(0, line0);
-      lcdPrintRow(1, line1);
+      if (swrLim > 0) {
+        snprintf(item2, sizeof(item2), "3.SWR: %u.%u", swrLim / 100, (swrLim % 100) / 10);
+      } else {
+        snprintf(item2, sizeof(item2), "3.SWR: OFF");
+      }
+
+      items[0] = item0;
+      items[1] = item1;
+      items[2] = item2;
+      items[3] = "4.Relay Test";
+      items[4] = "5.Reset Trip";
+      items[5] = "6.Save Flash";
+      items[6] = "7.Back";
+
+      lcdRender2RowMenu(items, 7, protMenuIndex);
 
       if (buttonJustPressed(13)) {
-        protMenuIndex = (protMenuIndex + 1) % 6;
+        protMenuIndex = (protMenuIndex + 1) % 7;
       } else if (buttonJustPressed(15)) {
-        protMenuIndex = (protMenuIndex + 5) % 6;
-      } else if (buttonJustPressed(14)) {
+        protMenuIndex = (protMenuIndex + 6) % 7;
+      } else if (buttonShortRelease(14)) {
         switch (protMenuIndex) {
-          case 0:
+          case 0: // Toggle ON / OFF
+            protectionToggleEnabled();
+            hasUnsavedConfig = true;
+            break;
+          case 1: // Set RAD limit
             protStep = PROT_STEP_SET_RAD;
             break;
-          case 1:
+          case 2: // Set SWR limit
             protStep = PROT_STEP_SET_SWR;
             break;
-          case 2:
+          case 3: // Relay Test
             protectionToggleRelay();
             break;
-          case 3:
+          case 4: // Reset Trip
             protectionReset();
             protStatusLine0 = "Trip Reset OK";
             protStatusLine1 = "Relay Restored";
             protStep = PROT_STEP_STATUS;
             break;
-          case 4:
+          case 5: // Save Settings
+            lcdPrintRow(0, "Saving Config...");
+            lcdPrintRow(1, "Do Not Power Off");
+            delay_ms(350);
             calSaveToFlash();
+            hasUnsavedConfig = false;
             protStatusLine0 = "Flash Storage";
             protStatusLine1 = "Settings Saved!";
             protStep = PROT_STEP_STATUS;
             break;
-          case 5:
+          case 6: // Back
+            buttonMenuIndex = getMainMenuIndexForAction(MM_ACTION_PROTECTIONS, hasUnsavedConfig);
             currentMenu = MAIN_MENU;
             break;
         }
@@ -461,16 +847,22 @@ void protectionMenu(void) {
     }
 
     case PROT_STEP_SET_RAD: {
-      snprintf(line0, sizeof(line0), "RAD Pwr Trip Set");
-      snprintf(line1, sizeof(line1), "Limit: [ %2u ] W", radLim);
+      snprintf(line0, sizeof(line0), "RAD Trip Limit");
+      if (radLim > 0) {
+        snprintf(line1, sizeof(line1), "Limit: [ %2u ] W", radLim);
+      } else {
+        snprintf(line1, sizeof(line1), "Limit: [ OFF ]");
+      }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonRepeat(13)) { // UP
         protectionSetRadLimit(stepRadLimitUp(radLim));
+        hasUnsavedConfig = true;
       } else if (buttonRepeat(15)) { // DOWN
         protectionSetRadLimit(stepRadLimitDown(radLim));
-      } else if (buttonJustPressed(14)) { // SELECT
+        hasUnsavedConfig = true;
+      } else if (buttonLongHold(14, 500) || buttonShortRelease(14)) { // SELECT
         protStep = PROT_STEP_MENU;
       }
       break;
@@ -478,15 +870,21 @@ void protectionMenu(void) {
 
     case PROT_STEP_SET_SWR: {
       snprintf(line0, sizeof(line0), "SWR Trip Limit");
-      snprintf(line1, sizeof(line1), "Limit: [ %1.1f ]", (double)swrLim / 100.0);
+      if (swrLim > 0) {
+        snprintf(line1, sizeof(line1), "Limit: [ %u.%u ]", swrLim / 100, (swrLim % 100) / 10);
+      } else {
+        snprintf(line1, sizeof(line1), "Limit: [ OFF ]");
+      }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonRepeat(13)) { // UP
         protectionSetSwrLimit(stepSwrLimitUp(swrLim));
+        hasUnsavedConfig = true;
       } else if (buttonRepeat(15)) { // DOWN
         protectionSetSwrLimit(stepSwrLimitDown(swrLim));
-      } else if (buttonJustPressed(14)) { // SELECT
+        hasUnsavedConfig = true;
+      } else if (buttonLongHold(14, 500) || buttonShortRelease(14)) { // SELECT
         protStep = PROT_STEP_MENU;
       }
       break;
@@ -496,7 +894,7 @@ void protectionMenu(void) {
       lcdPrintRow(0, protStatusLine0);
       lcdPrintRow(1, protStatusLine1);
 
-      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
         protStep = PROT_STEP_MENU;
       }
       break;
@@ -504,96 +902,214 @@ void protectionMenu(void) {
   }
 }
 
-static const char *mainMenuItemsList[] = {
-  "Back to Main",
-  "Cal FWD (1000W)",
-  "Cal REF (100W)",
-  "Cal RAD (50W)",
-  "Protections",
-  "Display Mode"
-};
-#define MAIN_MENU_COUNT 6
-
 void displayMenu(MenuState menu) {
   char buf0[32];
   char buf1[32];
 
   switch (menu) {
     case MAIN_SCREEN: {
+      // Check if protection is tripped
       if (protectionIsTripped()) {
-        lcdPrintRow(0, "*TRIP ALARM CUT*");
+        inScreenSaver = false;
+        lastActivityTime = now;
         if (protectionGetTripCause() == TRIP_RAD_OVERPOWER) {
-          snprintf(buf1, sizeof(buf1), "HI RAD:%2uW >%2uW", lastCalibratedRAD, protectionGetRadLimit());
+          lcdPrintRow(0, "*TRIP* HI RAD!  ");
         } else {
-          snprintf(buf1, sizeof(buf1), "HI SWR:%1.1f >%1.1f", (double)lastCalculatedSWRFloatValue, (double)protectionGetSwrLimit() / 100.0);
+          lcdPrintRow(0, "*TRIP* HI SWR!  ");
         }
-        lcdPrintRow(1, buf1);
+        lcdPrintRow(1, "SEL:Reset Hld:M ");
 
-        if (buttonJustPressed(14)) { // SELECT resets trip
+        if (buttonLongHold(14, 500)) { // Hold SELECT goes directly to Main Menu
+          currentMenu = MAIN_MENU;
+          buttonMenuIndex = 0;
+        } else if (buttonShortRelease(14)) { // Short press resets relay trip
           protectionReset();
         } else if (buttonJustPressed(13) || buttonJustPressed(15)) {
           currentMenu = MAIN_MENU;
+          buttonMenuIndex = 0;
         }
         break;
       }
 
-      // Row 0: FWD Power and SWR
-      snprintf(buf0, sizeof(buf0), "FWD:%4uW S:%1.2f", lastCalibratedFWD, (double)lastCalculatedSWRFloatValue);
+      // Check user interaction or power changes to exit screensaver
+      bool btn13 = buttonJustPressed(13);
+      bool btn14 = buttonShortRelease(14);
+      bool btn15 = buttonJustPressed(15);
+
+      if (btn13 || btn14 || btn15) {
+        lastActivityTime = now;
+        if (inScreenSaver) {
+          inScreenSaver = false;
+          // Consume button press on waking up
+          break;
+        }
+      }
+
+      // Check inactivity to enter screen saver (30 seconds)
+      if (!inScreenSaver && activeCal.protection.runningTextEnabled && lastActivityTime > 0 && 
+          (now - lastActivityTime >= SCREEN_SAVER_TIMEOUT_MS)) {
+        inScreenSaver = true;
+        runningTextScrollIdx = 0;
+        lastScrollTime = 0; // Trigger immediate scroll render
+        updateRunningText();
+      }
+
+      // If Screen Saver is active
+      if (inScreenSaver) {
+        lcdPrintRow(0, SCREEN_SAVER_ROW0_TEXT);
+        if (runningTextLen > 0 && (now - lastScrollTime >= SCREEN_SAVER_SCROLL_MS)) {
+          lastScrollTime = now;
+          char scrollBuf[17];
+          for (int i = 0; i < 16; i++) {
+            scrollBuf[i] = runningTextBuffer[(runningTextScrollIdx + i) % runningTextLen];
+          }
+          scrollBuf[16] = '\0';
+          lcdPrintRow(1, scrollBuf);
+          runningTextScrollIdx = (runningTextScrollIdx + 1) % runningTextLen;
+        }
+        break;
+      }
+
+      // Row 0: FWD Power (0-1000W) & SWR (1.00-9.99), formatted strictly <= 16 chars using pure integer math
+      uint16_t swr = lastCalculatedSWRValue;
+      if (swr > 999) swr = 999;
+      snprintf(buf0, sizeof(buf0), "FWD:%4uW S:%u.%02u", lastCalibratedFWD, swr / 100, swr % 100);
       lcdPrintRow(0, buf0);
 
-      // Row 1: REF or RAD (Radio-In drive power before booster)
-      if (!UIState) {
-        snprintf(buf1, sizeof(buf1), "REF:%4uW (Refl)", lastCalibratedREF);
+      // Row 1: Power Bar or clean REF/RAD numerical readout (no (Refl) or (R-In))
+      uint8_t barStyle = activeCal.protection.barStyle;
+      if (barStyle != BAR_STYLE_OFF && mainScreenView == 0) {
+        // Power Bar mode at cursor (1, 0)
+        renderPowerBar(buf1, lastCalibratedFWD, activeCal.channels[CAL_CH_FWD].maxWatts, barStyle);
+      } else if (mainScreenView == 2 || (mainScreenView == 0 && UIState)) {
+        snprintf(buf1, sizeof(buf1), "RAD: %3uW", lastCalibratedRAD);
       } else {
-        snprintf(buf1, sizeof(buf1), "RAD:%4uW (R-In)", lastCalibratedRAD);
+        snprintf(buf1, sizeof(buf1), "REF: %3uW", lastCalibratedREF);
       }
       lcdPrintRow(1, buf1);
 
-      if (buttonJustPressed(14)) { // SELECT opens main menu
+      if (btn14) { // SELECT opens main menu
         currentMenu = MAIN_MENU;
         buttonMenuIndex = 0;
-      } else if (buttonJustPressed(13) || buttonJustPressed(15)) { // UP/DOWN toggles REF/RAD
-        UIState = !UIState;
+      } else if (btn13) { // UP button
+        if (barStyle != BAR_STYLE_OFF) {
+          mainScreenView = (mainScreenView + 1) % 3;
+        } else {
+          UIState = !UIState;
+        }
+      } else if (btn15) { // DOWN button
+        if (barStyle != BAR_STYLE_OFF) {
+          mainScreenView = (mainScreenView + 2) % 3;
+        } else {
+          UIState = !UIState;
+        }
       }
       break;
     }
 
     case MAIN_MENU: {
-      snprintf(buf0, sizeof(buf0), "> %s", mainMenuItemsList[buttonMenuIndex]);
-      lcdPrintRow(0, buf0);
-      lcdPrintRow(1, "SEL:Ent  UP/DN:M");
+      char title[32];
+      char info[32];
+      uint8_t totalMenuItems = hasUnsavedConfig ? 8 : 7;
+      if (buttonMenuIndex >= totalMenuItems) buttonMenuIndex = 0;
+
+      MainMenuAction_t act = getMainMenuAction(buttonMenuIndex, hasUnsavedConfig);
+
+      switch (act) {
+        case MM_ACTION_SAVE_CONFIG:
+          snprintf(title, sizeof(title), "> Save Config");
+          snprintf(info, sizeof(info), "SEL: Save to ROM");
+          break;
+        case MM_ACTION_CAL_FWD:
+          snprintf(title, sizeof(title), "> Cal FWD");
+          snprintf(info, sizeof(info), "Pts Cal: %u/%u", calGetPointCount(CAL_CH_FWD), CAL_MAX_POINTS);
+          break;
+        case MM_ACTION_CAL_REF:
+          snprintf(title, sizeof(title), "> Cal REF");
+          snprintf(info, sizeof(info), "Pts Cal: %u/%u", calGetPointCount(CAL_CH_REF), CAL_MAX_POINTS);
+          break;
+        case MM_ACTION_CAL_RAD:
+          snprintf(title, sizeof(title), "> Cal RAD");
+          snprintf(info, sizeof(info), "Pts Cal: %u/%u", calGetPointCount(CAL_CH_RAD), CAL_MAX_POINTS);
+          break;
+        case MM_ACTION_PROTECTIONS:
+          snprintf(title, sizeof(title), "> Protections");
+          if (protectionIsEnabled()) {
+            snprintf(info, sizeof(info), "ON S:%u.%u R:%uW",
+                     protectionGetSwrLimit() / 100, (protectionGetSwrLimit() % 100) / 10,
+                     protectionGetRadLimit());
+          } else {
+            snprintf(info, sizeof(info), "Protection: OFF");
+          }
+          break;
+        case MM_ACTION_DISPLAY_MODE:
+          snprintf(title, sizeof(title), "> Display Mode");
+          snprintf(info, sizeof(info), "%s", barStyleNames[activeCal.protection.barStyle]);
+          break;
+        case MM_ACTION_RUNNING_TEXT:
+          snprintf(title, sizeof(title), "> Standby Text");
+          snprintf(info, sizeof(info), "R Text: %s", activeCal.protection.runningTextEnabled ? "ON" : "OFF");
+          break;
+        case MM_ACTION_BACK_MAIN:
+        default:
+          snprintf(title, sizeof(title), "> Back to Main");
+          snprintf(info, sizeof(info), "SEL: Main Screen");
+          break;
+      }
+
+      lcdPrintRow(0, title);
+      lcdPrintRow(1, info);
 
       if (buttonJustPressed(13)) {
-        buttonMenuIndex = (buttonMenuIndex + 1) % MAIN_MENU_COUNT;
+        buttonMenuIndex = (buttonMenuIndex + 1) % totalMenuItems;
       } else if (buttonJustPressed(15)) {
-        buttonMenuIndex = (buttonMenuIndex + MAIN_MENU_COUNT - 1) % MAIN_MENU_COUNT;
-      } else if (buttonJustPressed(14)) {
-        switch (buttonMenuIndex) {
-          case 0:
-            currentMenu = MAIN_SCREEN;
+        buttonMenuIndex = (buttonMenuIndex + totalMenuItems - 1) % totalMenuItems;
+      } else if (buttonShortRelease(14)) {
+        switch (act) {
+          case MM_ACTION_SAVE_CONFIG:
+            lcdPrintRow(0, "Saving Config...");
+            lcdPrintRow(1, "Do Not Power Off");
+            delay_ms(350);
+            calSaveToFlash();
+            hasUnsavedConfig = false;
+            buttonMenuIndex = 0;
+            lcdPrintRow(0, "Config Saved!   ");
+            lcdPrintRow(1, "Stored in Flash ");
+            delay_ms(800);
             break;
-          case 1:
+          case MM_ACTION_CAL_FWD:
             currentMenu = MAIN_CAL_FWD_MENU;
             calStep = CAL_STEP_MENU;
             calMenuActionIndex = 0;
+            calHasUnsavedChanges = false;
             break;
-          case 2:
+          case MM_ACTION_CAL_REF:
             currentMenu = MAIN_CAL_REF_MENU;
             calStep = CAL_STEP_MENU;
             calMenuActionIndex = 0;
+            calHasUnsavedChanges = false;
             break;
-          case 3:
+          case MM_ACTION_CAL_RAD:
             currentMenu = MAIN_CAL_RAD_MENU;
             calStep = CAL_STEP_MENU;
             calMenuActionIndex = 0;
+            calHasUnsavedChanges = false;
             break;
-          case 4:
+          case MM_ACTION_PROTECTIONS:
             currentMenu = MAIN_PROTECTION_MENU;
             protStep = PROT_STEP_MENU;
             protMenuIndex = 0;
             break;
-          case 5:
+          case MM_ACTION_DISPLAY_MODE:
             currentMenu = MAIN_MENU_UI;
+            break;
+          case MM_ACTION_RUNNING_TEXT:
+            activeCal.protection.runningTextEnabled = !activeCal.protection.runningTextEnabled;
+            hasUnsavedConfig = true;
+            buttonMenuIndex = getMainMenuIndexForAction(MM_ACTION_RUNNING_TEXT, hasUnsavedConfig);
+            break;
+          case MM_ACTION_BACK_MAIN:
+            currentMenu = MAIN_SCREEN;
             break;
         }
       }
@@ -617,17 +1133,32 @@ void displayMenu(MenuState menu) {
       break;
 
     case MAIN_MENU_UI: {
-      lcdPrintRow(0, "Display Row 1:");
-      if (UIState) {
-        lcdPrintRow(1, "> RAD (Radio-In)");
-      } else {
-        lcdPrintRow(1, "> REF (Reflect)");
-      }
+      uint8_t currentStyle = activeCal.protection.barStyle;
+      if (currentStyle >= BAR_STYLE_COUNT) currentStyle = 0;
 
-      if (buttonJustPressed(13) || buttonJustPressed(15)) {
-        UIState = !UIState;
-      } else if (buttonJustPressed(14)) {
+      char row0[20];
+      char row1[20];
+      snprintf(row0, sizeof(row0), "Power Bar Mode:");
+      snprintf(row1, sizeof(row1), "> %s", barStyleNames[currentStyle]);
+      lcdPrintRow(0, row0);
+      lcdPrintRow(1, row1);
+
+      if (buttonJustPressed(13)) {
+        activeCal.protection.barStyle = (currentStyle + 1) % BAR_STYLE_COUNT;
+        hasUnsavedConfig = true;
+      } else if (buttonJustPressed(15)) {
+        activeCal.protection.barStyle = (currentStyle + BAR_STYLE_COUNT - 1) % BAR_STYLE_COUNT;
+        hasUnsavedConfig = true;
+      } else if (buttonLongHold(14, 500)) {
+        // Hold SELECT to return to Main Menu, cursor placed directly on Display Mode
+        mainScreenView = 0; // Return to default view on main screen
+        buttonMenuIndex = getMainMenuIndexForAction(MM_ACTION_DISPLAY_MODE, hasUnsavedConfig);
         currentMenu = MAIN_MENU;
+      } else if (buttonShortRelease(14)) {
+        // Confirm selection, stay in Display Mode!
+        lcdPrintRow(0, "Power Bar Mode:");
+        lcdPrintRow(1, "Selected! (OK)  ");
+        delay_ms(500);
       }
       break;
     }

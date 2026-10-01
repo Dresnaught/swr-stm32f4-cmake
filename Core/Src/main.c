@@ -7,6 +7,7 @@
 #include "menu.h"
 #include "stm32f401xc.h"
 #include "sytick.h"
+#include "watchdog.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -18,6 +19,7 @@ int main(void) {
   ADCInit();
   calInit(); // Load calibration & protection settings from Flash
   protectionInit(); // Initialize protection relay / optocoupler pin (PB2)
+  updateRunningText(); // Pre-populate running text buffer for standby mode
 
   // Configure PC13 (Status LED on BlackPill) as output
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
@@ -30,7 +32,11 @@ int main(void) {
   lcdString("Digital STC8/F4");
   delay_ms(900);
 
+  // Initialize hardware watchdog for RF EMI and crash recovery
+  watchdogInit();
+
   while (1) {
+    watchdogRefresh();
     readReading();
     protectionCheck(calibratedFWD, calibratedRAD, calculatedSWRValue);
 

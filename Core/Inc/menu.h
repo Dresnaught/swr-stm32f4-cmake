@@ -8,6 +8,7 @@
 extern uint16_t lastCalibratedFWD;
 extern uint16_t lastCalibratedREF;
 extern uint16_t lastCalibratedRAD;
+extern uint16_t lastCalculatedSWRValue;
 extern float lastCalculatedSWRFloatValue;
 
 typedef enum {
@@ -32,7 +33,15 @@ void displayMenu(MenuState menu);
 // Calibration menu handler
 void calibrationMenu(CalChannelType ch);
 
+// Screen saver / running text configuration
+#define SCREEN_SAVER_TIMEOUT_MS   30000U // 30 seconds of inactivity
+#define SCREEN_SAVER_SCROLL_MS    250U   // Marquee step speed (250ms per shift)
+#define SCREEN_SAVER_ROW0_TEXT    "SWR & Power Mtr " // Static text on Cursor (0,0)
+
 // Protection menu handler
 void protectionMenu(void);
+
+// Screen saver running text updater
+void updateRunningText(void);
 
 #endif // MENU_H
