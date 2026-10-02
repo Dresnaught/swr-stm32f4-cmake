@@ -1,7 +1,19 @@
 #include "watchdog.h"
 #include "stm32f401xc.h"
 
+#define WDG_MAGIC 0x57444731U // 'WDG1'
+
+typedef struct {
+  uint32_t magic;
+  uint32_t location;
+} WatchdogBreadcrumb_t;
+
+// Persistent memory across watchdog / warm resets (placed in .noinit section)
+__attribute__((section(".noinit")))
+static WatchdogBreadcrumb_t crashBreadcrumb;
+
 static ResetReason_t detectedResetReason = RESET_REASON_UNKNOWN;
+static WatchdogLocation_t bootCrashLocation = WDG_LOC_UNKNOWN;
 
 void watchdogCheckResetReason(void) {
   uint32_t csr = RCC->CSR;
@@ -22,8 +34,19 @@ void watchdogCheckResetReason(void) {
     detectedResetReason = RESET_REASON_UNKNOWN;
   }
 
-  // Clear all reset flags
+  // Clear hardware reset flags
   RCC->CSR |= RCC_CSR_RMVF;
+
+  // If rebooted by watchdog, read crash breadcrumb from persistent RAM
+  if (detectedResetReason == RESET_REASON_IWDG && crashBreadcrumb.magic == WDG_MAGIC) {
+    bootCrashLocation = (WatchdogLocation_t)crashBreadcrumb.location;
+  } else {
+    bootCrashLocation = WDG_LOC_UNKNOWN;
+  }
+
+  // Initialize breadcrumb for this run
+  crashBreadcrumb.magic = WDG_MAGIC;
+  crashBreadcrumb.location = WDG_LOC_MAIN_LOOP;
 }
 
 ResetReason_t watchdogGetResetReason(void) {
@@ -38,7 +61,7 @@ const char* watchdogGetResetReasonStr(void) {
     case RESET_REASON_POR:      return "Power-On / POR";
     case RESET_REASON_PIN:      return "NRST Pin Reset";
     case RESET_REASON_LPWR:     return "Low Power Reset";
-    default:                    return "Normal / Unknown";
+    default:                    return "Normal Boot";
   }
 }
 
@@ -46,31 +69,55 @@ bool watchdogWasResetByIWDG(void) {
   return (detectedResetReason == RESET_REASON_IWDG);
 }
 
+void watchdogSetLocation(WatchdogLocation_t loc) {
+  crashBreadcrumb.magic = WDG_MAGIC;
+  crashBreadcrumb.location = (uint32_t)loc;
+}
+
+WatchdogLocation_t watchdogGetLastLocation(void) {
+  return bootCrashLocation;
+}
+
+const char* watchdogGetCrashReasonStr(void) {
+  if (detectedResetReason != RESET_REASON_IWDG) {
+    return watchdogGetResetReasonStr();
+  }
+
+  switch (bootCrashLocation) {
+    case WDG_LOC_USER_TEST:   return "Manual Test";
+    case WDG_LOC_LCD_I2C:     return "I2C Bus Lock";
+    case WDG_LOC_ADC_READ:    return "ADC Read Hang";
+    case WDG_LOC_FLASH_WRITE: return "Flash Write Hang";
+    case WDG_LOC_CAL_SAMPLE:  return "Cal Sample Hang";
+    case WDG_LOC_MAIN_LOOP:   return "Main Loop Stall";
+    default:                  return "RF EMI Lockup";
+  }
+}
+
 void watchdogInit(void) {
-  // 1. Enable register access by writing 0x5555 to KR
+  // Unlock watchdog registers
   IWDG->KR = 0x5555;
 
-  // 2. Set prescaler: PR = 6 (Divider = 256)
-  // With LSI ~32 kHz, clock rate is ~125 Hz (8 ms per tick)
+  // Prescaler: 256 (with 32 kHz LSI, ~125 Hz clock, 8 ms per tick)
   IWDG->PR = 6;
 
-  // 3. Set reload value: RLR = 1000 -> 1000 * 8 ms = 8000 ms (8.0s timeout)
+  // Reload: 1000 ticks = ~8.0 seconds timeout
   IWDG->RLR = 1000;
 
-  // 4. Reload counter with value in RLR
+  // Load counter
   IWDG->KR = 0xAAAA;
 
-  // 5. Start the watchdog counter
+  // Start counter
   IWDG->KR = 0xCCCC;
 }
 
 void watchdogRefresh(void) {
-  // Reload counter
   IWDG->KR = 0xAAAA;
 }
 
 void watchdogTriggerResetTest(void) {
-  // Stop kicking the watchdog and freeze execution to verify IWDG reboot
+  watchdogSetLocation(WDG_LOC_USER_TEST);
+  // Freeze CPU to verify watchdog reset
   while (1) {
     __NOP();
   }

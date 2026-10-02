@@ -5,15 +5,17 @@
 #include "protection.h"
 #include "button.h"
 #include "menu.h"
+#include "menu_main_screen.h"
 #include "stm32f401xc.h"
 #include "sytick.h"
 #include "watchdog.h"
 #include "buzzer.h"
+#include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 
 int main(void) {
-  // 1. Inspect RCC reset reason flags before clearing
+  // Check RCC reset flags and crash breadcrumb before clearing
   watchdogCheckResetReason();
 
   timeInit();
@@ -24,22 +26,24 @@ int main(void) {
   ADCInit();
   calInit(); // Load calibration & protection settings from Flash
   protectionInit(); // Initialize protection relay / optocoupler pin (PB2)
-  updateRunningText(); // Pre-populate running text buffer for standby mode
+  updateRunningText(); // Pre-populate running marquee buffer
 
   // Configure PC13 (Status LED on BlackPill) as output
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
   GPIOC->MODER &= ~(0x3 << (13 * 2));
   GPIOC->MODER |= (0x1 << (13 * 2));
 
-  // If reset was caused by the watchdog (e.g. RF EMI lockup / crash recovery), notify user
+  // If rebooted by watchdog, show the specific crash reason
   if (watchdogWasResetByIWDG()) {
+    char reasonBuf[17];
+    snprintf(reasonBuf, sizeof(reasonBuf), "Why: %-11s", watchdogGetCrashReasonStr());
     lcdCursor(0, 0);
     lcdString("*WATCHDOG RESET*");
     lcdCursor(1, 0);
-    lcdString("IWDG RF Recovery");
-    buzzerBeep(150); // Audible notification of watchdog reboot
+    lcdString(reasonBuf);
+    buzzerBeep(150);
 
-    // Wait up to 2.5s or until any button is pressed
+    // Wait up to 2.5s or until user presses any button
     for (int i = 0; i < 25; i++) {
       buzzerUpdate();
       delay_ms(100);
@@ -55,16 +59,22 @@ int main(void) {
     delay_ms(900);
   }
 
-  // Initialize hardware watchdog for RF EMI and crash recovery
+  // Initialize independent watchdog for crash and RF lockup recovery
   watchdogInit();
 
   while (1) {
+    watchdogSetLocation(WDG_LOC_MAIN_LOOP);
     watchdogRefresh();
     buzzerUpdate();
+
+    watchdogSetLocation(WDG_LOC_ADC_READ);
     readReading();
+
+    watchdogSetLocation(WDG_LOC_MAIN_LOOP);
     protectionCheck(calibratedFWD, calibratedRAD, calculatedSWRValue);
 
     if (updateReadings()) {
+      watchdogSetLocation(WDG_LOC_LCD_I2C);
       displayMenu(currentMenu);
     }
   }

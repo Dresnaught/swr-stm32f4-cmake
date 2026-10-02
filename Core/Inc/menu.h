@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "calibration.h"
 
+// Reading cache for LCD display
 extern uint16_t lastCalibratedFWD;
 extern uint16_t lastCalibratedREF;
 extern uint16_t lastCalibratedRAD;
@@ -22,30 +23,35 @@ typedef enum {
   MAIN_MENU_UI
 } MenuState;
 
-extern MenuState currentMenu;
-extern bool UIState; // false = REF power displayed, true = RAD (Radio-In) power displayed
+typedef enum {
+  MM_ACTION_SAVE_CONFIG,
+  MM_ACTION_CAL_FWD,
+  MM_ACTION_CAL_REF,
+  MM_ACTION_CAL_RAD,
+  MM_ACTION_PROTECTIONS,
+  MM_ACTION_DISPLAY_MODE,
+  MM_ACTION_RUNNING_TEXT,
+  MM_ACTION_DIAGNOSTIC,
+  MM_ACTION_BACK_MAIN
+} MainMenuAction_t;
 
-// Checks sensor values, timer ticks, and button state
+extern MenuState currentMenu;
+extern bool UIState;
+extern bool hasUnsavedConfig;
+extern uint8_t buttonMenuIndex;
+
+// Periodic sensor refresh and display tick
 bool updateReadings(void);
 
 // Main menu dispatcher
 void displayMenu(MenuState menu);
 
-// Calibration menu handler
-void calibrationMenu(CalChannelType ch);
+// Navigation helper
+uint8_t getMainMenuIndexForAction(MainMenuAction_t act, bool hasUnsaved);
 
-// Screen saver / running text configuration
-#define SCREEN_SAVER_TIMEOUT_MS   30000U // 30 seconds of inactivity
-#define SCREEN_SAVER_SCROLL_MS    250U   // Marquee step speed (250ms per shift)
-#define SCREEN_SAVER_ROW0_TEXT    "SWR & Power Mtr " // Static text on Cursor (0,0)
-
-// Protection menu handler
-void protectionMenu(void);
-
-// Diagnostic menu handler
-void diagnosticMenu(void);
-
-// Screen saver running text updater
-void updateRunningText(void);
+// Common LCD rendering helpers shared by sub-menus
+void lcdPrintRow(int row, const char *text);
+void lcdRender2RowMenu(const char *items[], uint8_t count, uint8_t selectedIndex);
+uint16_t getSmartWattStep(uint16_t maxWatts, uint16_t currentWatts);
 
 #endif // MENU_H

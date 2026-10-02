@@ -78,6 +78,15 @@ SECTIONS
     __end__ = .;
   } >RAM
 
+  /* Persistent data across warm / watchdog reboots */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+  } >RAM
+
   /* Define user stack pointer address top boundary */
   _estack = ORIGIN(RAM) + LENGTH(RAM);
 }

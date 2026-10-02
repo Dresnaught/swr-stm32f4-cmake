@@ -4,52 +4,44 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Hardware reset reason detected from RCC->CSR
 typedef enum {
   RESET_REASON_UNKNOWN = 0,
-  RESET_REASON_POR,       // Power-On / Brownout Reset
-  RESET_REASON_PIN,       // NRST Pin Reset
-  RESET_REASON_SOFTWARE,  // Software Reset
-  RESET_REASON_IWDG,      // Independent Watchdog Reset (RF Lockup / Crash)
-  RESET_REASON_WWDG,      // Window Watchdog Reset
-  RESET_REASON_LPWR       // Low Power Reset
+  RESET_REASON_POR,       // Power-on / brownout reset
+  RESET_REASON_PIN,       // NRST pin reset
+  RESET_REASON_SOFTWARE,  // Software reset
+  RESET_REASON_IWDG,      // Watchdog timeout (crash recovery)
+  RESET_REASON_WWDG,      // Window watchdog reset
+  RESET_REASON_LPWR       // Low power reset
 } ResetReason_t;
 
-/**
- * @brief Inspect RCC reset flags at boot and clear them
- * Call this early in main() before initializing other peripherals.
- */
+// Subsystem breadcrumb checkpoints to trace watchdog timeouts
+typedef enum {
+  WDG_LOC_UNKNOWN = 0,
+  WDG_LOC_MAIN_LOOP,     // Normal main measurement loop
+  WDG_LOC_ADC_READ,      // ADC sampling / conversion
+  WDG_LOC_LCD_I2C,       // I2C bus transmission to LCD
+  WDG_LOC_CAL_SAMPLE,    // In-system calibration sampling
+  WDG_LOC_FLASH_WRITE,   // Flash Sector 5 erase/program
+  WDG_LOC_USER_TEST      // Intentional watchdog test
+} WatchdogLocation_t;
+
+// Check reset flags early in startup and read crash breadcrumb
 void watchdogCheckResetReason(void);
 
-/**
- * @brief Get the last detected reset reason enum
- */
+// Reset reason helpers
 ResetReason_t watchdogGetResetReason(void);
-
-/**
- * @brief Get a human-readable string of the last reset reason
- */
 const char* watchdogGetResetReasonStr(void);
-
-/**
- * @brief Returns true if the MCU was rebooted by the hardware watchdog
- */
 bool watchdogWasResetByIWDG(void);
 
-/**
- * @brief Initialize the Independent Watchdog (IWDG)
- * Configures ~8.0 second timeout using the 32 kHz LSI clock.
- */
+// Crash breadcrumb tracking
+void watchdogSetLocation(WatchdogLocation_t loc);
+WatchdogLocation_t watchdogGetLastLocation(void);
+const char* watchdogGetCrashReasonStr(void);
+
+// Watchdog control
 void watchdogInit(void);
-
-/**
- * @brief Refresh / kick the Independent Watchdog (IWDG)
- * Prevents system reset when called periodically.
- */
 void watchdogRefresh(void);
-
-/**
- * @brief Intentional halt to test watchdog reset behavior
- */
 void watchdogTriggerResetTest(void);
 
 #endif // WATCHDOG_H
