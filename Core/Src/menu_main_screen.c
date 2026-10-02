@@ -5,6 +5,7 @@
 #include "sytick.h"
 #include "protection.h"
 #include "calibration.h"
+#include "buzzer.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -98,24 +99,30 @@ void renderMainScreen(void) {
     if (buttonLongHold(14, 500)) {
       currentMenu = MAIN_MENU;
       buttonMenuIndex = 0;
+      buzzerSet(false);
+      buttonClearAll();
     } else if (buttonShortRelease(14)) {
       protectionReset();
+      buttonClearAll();
     } else if (buttonJustPressed(13) || buttonJustPressed(15)) {
       currentMenu = MAIN_MENU;
       buttonMenuIndex = 0;
+      buzzerSet(false);
+      buttonClearAll();
     }
     return;
   }
 
   // 2. Activity Detection (buttons or transmission waking up screen saver)
   bool btn13 = buttonJustPressed(13);
-  bool btn14 = buttonShortRelease(14);
+  bool btn14 = buttonJustPressed(14);
   bool btn15 = buttonJustPressed(15);
 
   if (btn13 || btn14 || btn15) {
     lastActivityTime = now;
     if (inScreenSaver) {
       inScreenSaver = false;
+      buttonClearAll();
       return; // Consume button press on wake-up
     }
   }
@@ -174,6 +181,7 @@ void renderMainScreen(void) {
   if (btn14) {
     currentMenu = MAIN_MENU;
     buttonMenuIndex = 0;
+    buttonClearAll();
   } else if (btn13) {
     if (barStyle != BAR_STYLE_OFF) {
       mainScreenView = (mainScreenView + 1) % 3;

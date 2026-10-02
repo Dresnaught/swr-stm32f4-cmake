@@ -45,7 +45,8 @@ void diagnosticMenu(void) {
         diagMenuIndex = (diagMenuIndex + 1) % DIAG_ITEM_COUNT;
       } else if (buttonJustPressed(15)) {
         diagMenuIndex = (diagMenuIndex + DIAG_ITEM_COUNT - 1) % DIAG_ITEM_COUNT;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         switch (diagMenuIndex) {
           case 0: diagStep = DIAG_STEP_ADC_LIVE; break;
           case 1: diagStep = DIAG_STEP_BUTTONS_LIVE; break;
@@ -73,7 +74,8 @@ void diagnosticMenu(void) {
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
-      if (buttonShortRelease(14) || buttonLongHold(14, 500) || buttonJustPressed(15)) {
+      if (buttonJustPressed(14) || buttonJustPressed(15)) {
+        buttonClearAll();
         diagStep = DIAG_STEP_MENU;
       }
       break;
@@ -137,7 +139,8 @@ void diagnosticMenu(void) {
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
-      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        buttonClearAll();
         diagStep = DIAG_STEP_MENU;
       }
       break;

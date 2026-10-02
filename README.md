@@ -2,7 +2,21 @@
 
 Digital SWR and RF power meter designed primarily for monitoring VHF power amplifiers / boosters (144 MHz / 2m band).
 
-The firmware is currently running on an **STM32F401xC** ("Black Pill") for prototyping and algorithm tuning. The final target hardware is based on an **STC8H8K64U** microcontroller; schematic and 4-layer Gerber files are available in `PCB and Schematic/`. All core math, calibration, menu logic, and LCD rendering are written in portable C to make porting to 8051 (SDCC / Keil C51) straightforward.
+The firmware is currently running on an **STM32F401xC** ("Black Pill") for prototyping and algorithm tuning. The final target hardware is based on an **STC8H8K64U** microcontroller; schematic, 4-layer Gerber files, and PCB render images are available in `PCB and Schematic/`. All core math, calibration, menu logic, and LCD rendering are written in portable C to make porting to 8051 (SDCC / Keil C51) straightforward.
+
+---
+
+## Hardware & PCB Design
+
+The custom digital controller PCB is designed around the **STC8H8K64U-45I-LQFP32** with direct 4-bit parallel LCD interface, active buzzer, optocoupler-driven relay cutoff, and TVS clamp protection on ADC inputs.
+
+| View | With 3D Components | 2D PCB Layout |
+| :--- | :---: | :---: |
+| **Front** | ![PCB Front 3D](<PCB and Schematic/front.jpeg>) | ![PCB Front 2D](<PCB and Schematic/front no 3d.jpeg>) |
+| **Back** | ![PCB Back 3D](<PCB and Schematic/back.jpeg>) | ![PCB Back 2D](<PCB and Schematic/back no 3d.jpeg>) |
+
+> **Why is there an anime graphic on the PCB silkscreen?**  
+> The reason is: *Anime*.
 
 ---
 
@@ -10,7 +24,10 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
 
 - **RF Measurements**: 3-channel 12-bit ADC sensing for Forward (`FWD`), Reflected (`REF`), and Radio Drive (`RAD`) voltages.
 - **Diode Non-Linearity Compensation**: Piecewise linear interpolation (PWLI) with up to 10 user-defined calibration points per channel.
-- **Fast Integer Math**: SWR and power calculations use integer arithmetic and a fast integer square root (`isqrt`), keeping execution fast without floating-point overhead.
+- **Proportional Curve Adaptation**: Calibrating a single known power reference (e.g. 20W) prompts `Adapt all: >YES / >NO` to proportionally scale the entire curve, preserving diode non-linearity while matching coupler sensitivity.
+- **Monotonicity Protection**: Automatically detects and prevents inverted calibration points ($W_1 < W_2$ but $ADC_1 \ge ADC_2$) to prevent negative slopes or calculation bugs.
+- **Auto-Marquee Scrolling**: Any LCD line exceeding 16 characters automatically scrolls smoothly (1000 ms pause, 250 ms shift per char, wrap-around) with smart frame-caching to eliminate LCD flicker.
+- **Fast Integer Math**: SWR and power calculations use pure integer arithmetic and a fast integer square root (`isqrt`), keeping execution fast without floating-point overhead.
 - **Signal Filtering**: Exponential moving average (EMA) filter on ADC readings to smooth out mains noise and RF jitter without introducing noticeable lag.
 - **Tuned Display Refresh**: Main screen updates every 180 ms (~5.5 Hz) to match standard HD44780 LCD response times and prevent ghosting.
 - **Power Bar Options**:
@@ -18,11 +35,12 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
   - Solid progressive bar (`|||||`).
   - Off (shows REF or RAD numeric wattage on line 2).
   - Quick toggle using UP / DOWN buttons on the home screen.
-- **Hardware Protection**:
+- **Hardware Protection (2-State Architecture)**:
   - High SWR cutoff (configurable from 1.1 to 5.0, only trips when FWD power is present).
   - Over-drive cutoff (RAD power limit from 1W to 50W).
   - Drives an optocoupler + relay (`PB2`) to drop transmitter PTT or insert an attenuator on fault.
-  - Fault lock screen shows reason (`*TRIP* HI SWR!` or `*TRIP* HI RAD!`). Press SELECT to reset, or hold SELECT (500ms) / UP / DOWN to go to the menu.
+  - Active buzzer alarm on trip (PB0 on proto, P2.6 on STC8).
+  - **Auto-protect & non-softlock navigation**: Overload immediately cuts off the relay and switches to the trip screen (`*TRIP* HI SWR!` or `*TRIP* HI RAD!`). Pressing SELECT resets protection; holding SELECT (500ms) or UP / DOWN enters the menu without being kicked out or softlocked. Relay remains safely latched off while in the menu.
   - Manual relay test toggle in menu.
 - **On-Device Calibration**:
   - Add, edit, remove, and view calibration points directly from the LCD menu.
@@ -33,10 +51,20 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
   - After 30 seconds of idle power (0W) without button presses, Line 2 scrolls a status marquee showing max power limits and protection status.
   - Exits immediately on any button press or RF transmission (>1W).
   - Can be toggled on/off in the menu (`> Standby Text`).
-- **Watchdog Protection**: Hardware IWDG enabled to recover automatically in case of severe RF/EMI lockup.
-- **Debounced Dual-Action Buttons**:
-  - Release-based short press prevents unintended triggers when pressing and holding.
-  - 500 ms long hold triggers immediately.
+- **Hardware Watchdog with Crash Breadcrumbs**:
+  - Hardware IWDG recovers automatically if RF/EMI causes CPU lockup.
+  - Subsystem checkpoints stored in persistent RAM (`.noinit`) identify the exact cause upon reboot (e.g. `Why: I2C Bus Lock`, `Why: ADC Read Hang`, `Why: Manual Test`, `Why: Main Loop Stall`).
+  - Notifies user on LCD at startup if reboot was caused by watchdog.
+- **Hardware Diagnostics Menu**:
+  - Live raw ADC monitor for FWD, REF, and RAD channels.
+  - Real-time GPIO button monitor (`UP`, `SEL`, `DN`).
+  - Manual relay and buzzer toggles.
+  - Boot reset reason and intentional watchdog reset test.
+- **Symmetrical 25ms Debounced Buttons**:
+  - Industrial-grade debounce filter eliminates tactile switch chatter on both press and release.
+  - Single-consumption event flags prevent double-clicks.
+  - Menu transitions automatically disarm pending releases, preventing keypress bleed across screens.
+  - 500 ms long hold for alternate actions.
 
 ---
 
@@ -44,16 +72,18 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
 
 | Item | Platform | Status |
 | :--- | :--- | :--- |
-| Core drivers (ADC, I2C, SysTick, GPIO) | STM32F401xC | Working |
+| Core drivers (ADC, I2C, SysTick, GPIO, Buzzer) | STM32F401xC | Working |
 | SWR math, PWLI interpolation, EMA filter | Portable C | Working |
 | HD44780 LCD driver & custom bar characters | Portable C | Working |
 | Button debouncing & long-press handling | STM32 / Portable | Working |
-| On-device multi-point calibration & Flash storage | Portable C / STM32 | Working |
-| Protection limits & relay cutoff logic | Portable C | Working |
+| Multi-point calibration, curve adapt & Flash storage | Portable C / STM32 | Working |
+| Protection limits, relay cutoff & buzzer alarm | Portable C | Working |
 | Display modes (Scale bar, Pipe bar, Text) | Portable C | Working |
 | Standby marquee screensaver | Portable C | Working |
-| Hardware IWDG watchdog | STM32F401xC | Working |
-| STC8 PCB schematic & 4-layer Gerbers | Hardware | Complete (`PCB and Schematic/`) |
+| Hardware IWDG watchdog with crash breadcrumbs | STM32F401xC | Working |
+| Hardware diagnostic & self-test suite | Portable C | Working |
+| Modular menu architecture (screen, cal, prot, diag) | Portable C | Working |
+| STC8 PCB schematic, 4-layer Gerbers & 3D renders | Hardware | Complete (`PCB and Schematic/`) |
 | Physical board assembly | Hardware | In progress |
 | Port to STC8H8K64U | STC8 (8051) | Planned |
 
@@ -76,7 +106,7 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
 | **Button SELECT** | `PB14` (Pull-up) | `P0.2` | Select / confirm / hold: menu (active low) |
 | **Button DOWN** | `PB15` (Pull-up) | `P0.3` | Down / decrement / view cycle (active low) |
 | **Relay** | `PB2` | `P2.7` | Drives optocoupler (High = normal, Low = tripped) |
-| **Buzzer** | — | `P2.6` | Buzzer on trip (target PCB) |
+| **Buzzer** | `PB0` | `P2.6` | Buzzer on trip (alarm) |
 | **I2C SCL** | `PB6` | — | LCD backpack clock (proto) |
 | **I2C SDA** | `PB7` | — | LCD backpack data (proto) |
 | **LCD Parallel** | — | `P2.0`–`P2.5` | 4-bit parallel bus (target PCB) |
@@ -97,9 +127,9 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
   │     SEL: Write changes to flash
   │
   ├── [ > Cal FWD ] / [ > Cal REF ] / [ > Cal RAD ]
-  │     ├── 1. Add Point    -> Enter target watts -> apply RF -> 5s sample -> save
-  │     ├── 2. Edit Point   -> Pick point -> edit watts -> sample
-  │     ├── 3. Remove Point -> Pick point -> confirm delete
+  │     ├── 1. Add Point    -> Target Watts -> Apply RF -> 5s Sample -> Adapt all? -> Save
+  │     ├── 2. Edit Point   -> Pick point -> Edit Watts -> Sample -> Save
+  │     ├── 3. Remove Point -> Pick point -> Confirm delete
   │     ├── 4. View Points  -> Browse saved calibration table
   │     ├── 5. Save Flash   -> Commit channel points to flash
   │     ├── 6. Reset Def    -> Restore default curves
@@ -122,6 +152,15 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
   │
   ├── [ > Standby Text ]
   │     SEL: Toggle standby screen saver ON / OFF
+  │
+  ├── [ > Diagnostic ]
+  │     ├── 1. Live ADC     -> Real-time raw ADC monitor (FWD, REF, RAD)
+  │     ├── 2. Buttons Test -> Real-time button GPIO monitor (UP, SEL, DN)
+  │     ├── 3. Relay Test   -> Toggle relay state on PB2
+  │     ├── 4. Buzzer Test  -> Toggle buzzer output on PB0
+  │     ├── 5. Boot Reason  -> Displays reset cause & crash breadcrumb
+  │     ├── 6. Watchdog Test-> Halt CPU to test watchdog reboot
+  │     └── 7. Back         -> Return to main menu
   │
   └── [ > Back to Main ]
         SEL: Return to home screen
@@ -159,20 +198,29 @@ $$\text{SWR} = \frac{1000 + (\Gamma \times 1000)}{1000 - (\Gamma \times 1000)}$$
 swr-stm32f4-cmake/
 ├── CMakeLists.txt              # Build configuration
 ├── arm-none-eabi.cmake         # Toolchain file for ARM GCC
-├── LinkerScript.ld             # Linker script for STM32F401xC
+├── LinkerScript.ld             # Linker script for STM32F401xC (with .noinit RAM section)
 ├── README.md
 ├── LICENSE                     # PolyForm Noncommercial 1.0.0
 ├── PCB and Schematic/          # Target hardware files (STC8)
 │   ├── SCH_Schematic1_2026-09-30.pdf # Schematic
-│   └── Gerber/                 # 4-layer production Gerbers
+│   ├── Gerber/                 # 4-layer production Gerbers
+│   ├── front.jpeg              # 3D render (front)
+│   ├── front no 3d.jpeg        # PCB layout (front)
+│   ├── back.jpeg               # 3D render (back)
+│   └── back no 3d.jpeg         # PCB layout (back)
 └── Core/
     ├── Inc/                    # Header files
     │   ├── adc.h
     │   ├── button.h
+    │   ├── buzzer.h
     │   ├── calibration.h
     │   ├── conversion.h
     │   ├── lcd.h
     │   ├── menu.h
+    │   ├── menu_calibration.h
+    │   ├── menu_diagnostic.h
+    │   ├── menu_main_screen.h
+    │   ├── menu_protection.h
     │   ├── protection.h
     │   ├── storage.h
     │   ├── sytick.h
@@ -180,15 +228,20 @@ swr-stm32f4-cmake/
     └── Src/                    # Implementation
         ├── adc.c               # ADC1 register-level driver
         ├── button.c            # Debounced button inputs & hold detection
-        ├── calibration.c       # Calibration CRUD, sorting, and checksums
+        ├── buzzer.c            # Buzzer driver (PB0 on proto, P2.6 on STC8)
+        ├── calibration.c       # Calibration CRUD, sorting, and curve scaling
         ├── conversion.c        # SWR integer math & EMA filter
         ├── lcd.c               # I2C LCD driver & custom glyphs
-        ├── main.c              # Entry point & main loop
-        ├── menu.c              # UI menu logic & display routines
+        ├── main.c              # Entry point, watchdog tracking & main loop
+        ├── menu.c              # Main menu coordinator & LCD helpers
+        ├── menu_calibration.c  # Multi-point calibration & adapt workflow
+        ├── menu_diagnostic.c   # Hardware diagnostic & self-test routines
+        ├── menu_main_screen.c  # Home measurement screen & power bars
+        ├── menu_protection.c   # Protection thresholds & relay controls
         ├── protection.c        # Protection trip engine & relay control
         ├── storage_stm32.c     # Flash Sector 5 persistence
         ├── sytick.c            # Delay functions
-        ├── watchdog.c          # IWDG initialization and refresh
+        ├── watchdog.c          # IWDG driver & .noinit crash breadcrumbs
         ├── startup_stm32f401xc.s
         └── system_stm32f4xx.c
 ```

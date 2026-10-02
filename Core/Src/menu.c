@@ -31,16 +31,66 @@ static const char *barStyleNames[] = {
   "Pipes (|||||)   "
 };
 
+// Track per-row scroll state for automatic marquee scrolling
+static char rowTextCache[2][64];
+static uint8_t rowScrollOffset[2] = {0, 0};
+static uint32_t rowTextStartTime[2] = {0, 0};
+static uint32_t lastRowScrollTime[2] = {0, 0};
+static char rowVisibleCache[2][16];
+static bool rowVisibleInit[2] = {false, false};
+
 void lcdPrintRow(int row, const char *text) {
-  lcdCursor(row, 0);
-  int count = 0;
-  while (*text && count < 16) {
-    lcd_send_data(*text++);
-    count++;
+  if (row < 0 || row > 1) return;
+
+  // Detect when text changes on this row
+  if (strncmp(rowTextCache[row], text, sizeof(rowTextCache[row]) - 1) != 0) {
+    strncpy(rowTextCache[row], text, sizeof(rowTextCache[row]) - 1);
+    rowTextCache[row][sizeof(rowTextCache[row]) - 1] = '\0';
+    rowScrollOffset[row] = 0;
+    rowTextStartTime[row] = now;
+    lastRowScrollTime[row] = now;
+    rowVisibleInit[row] = false; // Force immediate LCD redraw
   }
-  while (count < 16) {
-    lcd_send_data(' ');
-    count++;
+
+  uint8_t len = (uint8_t)strlen(rowTextCache[row]);
+  char visible[16];
+
+  if (len <= 16) {
+    // Fits within 16 chars: copy directly and pad with trailing spaces
+    for (uint8_t i = 0; i < 16; i++) {
+      visible[i] = (i < len) ? rowTextCache[row][i] : ' ';
+    }
+  } else {
+    // Exceeds 16 chars: cycle smoothly like running text
+    uint8_t cycleLen = len + 3; // Text plus 3 spaces gap
+
+    // Pause for 1000 ms at the start before beginning to scroll
+    if (now - rowTextStartTime[row] >= 1000) {
+      if (now - lastRowScrollTime[row] >= 250) {
+        lastRowScrollTime[row] = now;
+        rowScrollOffset[row]++;
+        if (rowScrollOffset[row] >= cycleLen) {
+          rowScrollOffset[row] = 0;
+          rowTextStartTime[row] = now; // Pause again at the start
+        }
+      }
+    }
+
+    uint8_t start = rowScrollOffset[row];
+    for (uint8_t i = 0; i < 16; i++) {
+      uint8_t idx = (start + i) % cycleLen;
+      visible[i] = (idx < len) ? rowTextCache[row][idx] : ' ';
+    }
+  }
+
+  // Only send over I2C if the 16 characters on the display have changed
+  if (!rowVisibleInit[row] || memcmp(rowVisibleCache[row], visible, 16) != 0) {
+    memcpy(rowVisibleCache[row], visible, 16);
+    rowVisibleInit[row] = true;
+    lcdCursor(row, 0);
+    for (uint8_t i = 0; i < 16; i++) {
+      lcd_send_data(visible[i]);
+    }
   }
 }
 
@@ -138,6 +188,15 @@ bool updateReadings(void) {
     return true;
   }
 
+  // Wake or process button inputs instantly (sub-millisecond latency)
+  if (buttonAnyPressed()) {
+    return true;
+  }
+
+  if (protectionIsTripped()) {
+    return true;
+  }
+
   // 180 ms refresh interval matches the physical rise/fall time of HD44780 liquid crystals
   static uint32_t lastRefresh = 0;
   if ((now - lastRefresh) >= 180) {
@@ -186,7 +245,9 @@ void displayMenu(MenuState menu) {
           break;
         case MM_ACTION_PROTECTIONS:
           snprintf(title, sizeof(title), "> Protections");
-          if (protectionIsEnabled()) {
+          if (protectionIsTripped()) {
+            snprintf(info, sizeof(info), "!TRIPPED! SEL:Prot");
+          } else if (protectionIsEnabled()) {
             snprintf(info, sizeof(info), "ON S:%u.%u R:%uW",
                      protectionGetSwrLimit() / 100, (protectionGetSwrLimit() % 100) / 10,
                      protectionGetRadLimit());
@@ -220,7 +281,8 @@ void displayMenu(MenuState menu) {
         buttonMenuIndex = (buttonMenuIndex + 1) % totalMenuItems;
       } else if (buttonJustPressed(15)) {
         buttonMenuIndex = (buttonMenuIndex + totalMenuItems - 1) % totalMenuItems;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         switch (act) {
           case MM_ACTION_SAVE_CONFIG:
             lcdPrintRow(0, "Saving Config...");

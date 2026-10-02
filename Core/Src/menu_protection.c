@@ -33,7 +33,11 @@ void protectionMenu(void) {
       char item2[20];
       const char *items[7];
 
-      snprintf(item0, sizeof(item0), "1.Protect: %s", protectionIsEnabled() ? "ON" : "OFF");
+      if (protectionIsTripped()) {
+        snprintf(item0, sizeof(item0), "1.State: TRIPPED");
+      } else {
+        snprintf(item0, sizeof(item0), "1.Protect: %s", protectionIsEnabled() ? "ON" : "OFF");
+      }
       if (radLim > 0) snprintf(item1, sizeof(item1), "2.RAD Lim: %2uW", radLim);
       else snprintf(item1, sizeof(item1), "2.RAD Lim: OFF");
 
@@ -54,7 +58,8 @@ void protectionMenu(void) {
         protMenuIndex = (protMenuIndex + 1) % 7;
       } else if (buttonJustPressed(15)) {
         protMenuIndex = (protMenuIndex + 6) % 7;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         switch (protMenuIndex) {
           case 0:
             protectionToggleEnabled();
@@ -112,7 +117,8 @@ void protectionMenu(void) {
       } else if (buttonRepeat(15)) {
         protectionSetRadLimit(stepRadLimitDown(radLim));
         hasUnsavedConfig = true;
-      } else if (buttonLongHold(14, 500) || buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         protStep = PROT_STEP_MENU;
       }
       break;
@@ -134,7 +140,8 @@ void protectionMenu(void) {
       } else if (buttonRepeat(15)) {
         protectionSetSwrLimit(stepSwrLimitDown(swrLim));
         hasUnsavedConfig = true;
-      } else if (buttonLongHold(14, 500) || buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         protStep = PROT_STEP_MENU;
       }
       break;
@@ -144,7 +151,8 @@ void protectionMenu(void) {
       lcdPrintRow(0, protStatusLine0);
       lcdPrintRow(1, protStatusLine1);
 
-      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        buttonClearAll();
         protStep = PROT_STEP_MENU;
       }
       break;

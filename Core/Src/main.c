@@ -66,6 +66,7 @@ int main(void) {
     watchdogSetLocation(WDG_LOC_MAIN_LOOP);
     watchdogRefresh();
     buzzerUpdate();
+    buttonUpdate();
 
     watchdogSetLocation(WDG_LOC_ADC_READ);
     readReading();

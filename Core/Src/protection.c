@@ -2,6 +2,8 @@
 #include "stm32f401xc.h"
 #include "calibration.h"
 #include "buzzer.h"
+#include "menu.h"
+#include "button.h"
 
 static bool relayState = true;
 static bool isTripped = false;
@@ -39,6 +41,8 @@ void protectionTrip(TripCause_t cause) {
   currentTripCause = cause;
   protectionSet(false); // Instantly de-energize optocoupler / relay
   buzzerSet(true);      // Sound buzzer on fault
+  currentMenu = MAIN_SCREEN; // Auto-protect: immediately switch to trip alert screen
+  buttonClearAll();
 }
 
 void protectionReset(void) {

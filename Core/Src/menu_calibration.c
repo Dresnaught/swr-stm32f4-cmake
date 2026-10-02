@@ -71,7 +71,8 @@ void calibrationMenu(CalChannelType ch) {
         calMenuActionIndex = (calMenuActionIndex + 1) % CAL_ACTION_COUNT;
       } else if (buttonJustPressed(15)) {
         calMenuActionIndex = (calMenuActionIndex + CAL_ACTION_COUNT - 1) % CAL_ACTION_COUNT;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         switch (calMenuActionIndex) {
           case 0: // 1. Add Point
             if (count >= CAL_MAX_POINTS) {
@@ -246,16 +247,17 @@ void calibrationMenu(CalChannelType ch) {
     case CAL_STEP_ADAPT_PROMPT: {
       snprintf(line0, sizeof(line0), "Pt:%uW ADC:%4u", calTargetWatt, calSampledAvgAdc);
       if (calAdaptChoice == 0) {
-        snprintf(line1, sizeof(line1), "Adapt all? >YES NO");
+        snprintf(line1, sizeof(line1), "Adapt all: >YES ");
       } else {
-        snprintf(line1, sizeof(line1), "Adapt all?  YES >NO");
+        snprintf(line1, sizeof(line1), "Adapt all: >NO  ");
       }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonJustPressed(13) || buttonJustPressed(15)) {
         calAdaptChoice = (calAdaptChoice == 0) ? 1 : 0;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         if (calAdaptChoice == 0) {
           // Proportionally adapt all remaining points on the curve
           calAdaptAllPoints(ch, calTargetWatt, calSampledAvgAdc);
@@ -290,16 +292,17 @@ void calibrationMenu(CalChannelType ch) {
       CalPoint_t *cp = &activeCal.channels[ch].points[calConflictPointIdx];
       snprintf(line0, sizeof(line0), "Conflict:%uW=%u", cp->value, cp->raw);
       if (calConflictChoice == 0) {
-        snprintf(line1, sizeof(line1), "Fix? >ADJUST CANCL");
+        snprintf(line1, sizeof(line1), "Fix: >ADJUST    ");
       } else {
-        snprintf(line1, sizeof(line1), "Fix?  ADJUST >CANCL");
+        snprintf(line1, sizeof(line1), "Fix: >DISCARD   ");
       }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonJustPressed(13) || buttonJustPressed(15)) {
         calConflictChoice = (calConflictChoice == 0) ? 1 : 0;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         if (calConflictChoice == 0) {
           calAdaptAllPoints(ch, calTargetWatt, calSampledAvgAdc);
           calHasUnsavedChanges = true;
@@ -322,7 +325,8 @@ void calibrationMenu(CalChannelType ch) {
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
-      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        buttonClearAll();
         calStep = CAL_STEP_MENU;
       }
       break;
@@ -418,7 +422,8 @@ void calibrationMenu(CalChannelType ch) {
         if (count > 0) calViewPointIndex = (calViewPointIndex + 1) % count;
       } else if (buttonJustPressed(15)) {
         if (count > 0) calViewPointIndex = (calViewPointIndex + count - 1) % count;
-      } else if (buttonShortRelease(14) || buttonLongHold(14, 500)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         calStep = CAL_STEP_MENU;
       }
       break;
@@ -428,7 +433,8 @@ void calibrationMenu(CalChannelType ch) {
       lcdPrintRow(0, calStatusMsgLine0);
       lcdPrintRow(1, calStatusMsgLine1);
 
-      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+      if (buttonJustPressed(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        buttonClearAll();
         calStep = CAL_STEP_MENU;
       }
       break;
@@ -437,16 +443,17 @@ void calibrationMenu(CalChannelType ch) {
     case CAL_STEP_SAVE_PROMPT: {
       snprintf(line0, sizeof(line0), "Save config?");
       if (savePromptChoice == 0) {
-        snprintf(line1, sizeof(line1), " >OK   NO       ");
+        snprintf(line1, sizeof(line1), "Save: >YES      ");
       } else {
-        snprintf(line1, sizeof(line1), "  OK  >NO       ");
+        snprintf(line1, sizeof(line1), "Save: >NO       ");
       }
       lcdPrintRow(0, line0);
       lcdPrintRow(1, line1);
 
       if (buttonJustPressed(13) || buttonJustPressed(15)) {
         savePromptChoice = (savePromptChoice == 0) ? 1 : 0;
-      } else if (buttonShortRelease(14)) {
+      } else if (buttonJustPressed(14)) {
+        buttonClearAll();
         if (savePromptChoice == 0) {
           lcdPrintRow(0, "Saving Config...");
           lcdPrintRow(1, "Do Not Power Off");
