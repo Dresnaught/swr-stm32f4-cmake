@@ -10,7 +10,7 @@ The firmware is currently running on an **STM32F401xC** ("Black Pill") for proto
 
 The custom digital controller PCB is designed around the **STC8H8K64U-45I-LQFP32** with direct 4-bit parallel LCD interface, active buzzer, optocoupler-driven relay cutoff, and TVS clamp protection on ADC inputs.
 
-| View | With 3D Components | 2D PCB Layout |
+| View | With 3D Components | Without 3D Components |
 | :--- | :---: | :---: |
 | **Front** | ![PCB Front 3D](<PCB and Schematic/front.jpeg>) | ![PCB Front 2D](<PCB and Schematic/front no 3d.jpeg>) |
 | **Back** | ![PCB Back 3D](<PCB and Schematic/back.jpeg>) | ![PCB Back 2D](<PCB and Schematic/back no 3d.jpeg>) |
