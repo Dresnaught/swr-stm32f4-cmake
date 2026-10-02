@@ -18,6 +18,7 @@ typedef enum {
   MAIN_CAL_REF_MENU,
   MAIN_CAL_RAD_MENU,
   MAIN_PROTECTION_MENU,
+  MAIN_DIAGNOSTIC_MENU,
   MAIN_MENU_UI
 } MenuState;
 
@@ -40,6 +41,9 @@ void calibrationMenu(CalChannelType ch);
 
 // Protection menu handler
 void protectionMenu(void);
+
+// Diagnostic menu handler
+void diagnosticMenu(void);
 
 // Screen saver running text updater
 void updateRunningText(void);

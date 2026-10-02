@@ -72,6 +72,10 @@ bool calRemoveAllPoints(CalChannelType ch);
 void calSortPoints(CalChannelType ch);
 uint8_t calGetPointCount(CalChannelType ch);
 
+// Monotonicity check & proportional curve adaptation
+bool calCheckConflict(CalChannelType ch, uint16_t targetWatt, uint16_t rawADC, uint8_t *conflictIdx);
+bool calAdaptAllPoints(CalChannelType ch, uint16_t targetWatt, uint16_t newRawADC);
+
 // Channel metadata helpers
 const char* calGetChannelName(CalChannelType ch);
 uint16_t calGetChannelMaxWatts(CalChannelType ch);

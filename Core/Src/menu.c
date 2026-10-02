@@ -6,6 +6,9 @@
 #include "button.h"
 #include "sytick.h"
 #include "adc.h"
+#include "buzzer.h"
+#include "watchdog.h"
+#include "stm32f401xc.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -27,6 +30,8 @@ typedef enum {
   CAL_STEP_SET_WATT,            // Set target wattage
   CAL_STEP_PROMPT_RF,           // Ready prompt before sampling
   CAL_STEP_SAMPLING,            // Active 5-second sampling
+  CAL_STEP_ADAPT_PROMPT,        // Prompt "Adapt all? >YES NO"
+  CAL_STEP_CONFLICT_WARN,       // Monotonicity conflict warning
   CAL_STEP_SAMPLE_DONE,         // Show result after sampling
   CAL_STEP_REMOVE_PICK,         // Pick point to remove
   CAL_STEP_REMOVE_CONFIRM,      // Confirm single deletion
@@ -53,6 +58,25 @@ static bool calHasUnsavedChanges = false;
 static uint8_t savePromptChoice = 0; // 0 = >OK  NO, 1 =  OK >NO
 static bool hasUnsavedConfig = false;
 
+// Calibration adapt and conflict choices
+static uint8_t calAdaptChoice = 0;    // 0 = >YES NO, 1 = YES >NO
+static uint8_t calConflictPointIdx = 0;
+static uint8_t calConflictChoice = 0; // 0 = >ADJUST CANCEL, 1 = ADJUST >CANCEL
+
+// Diagnostic sub-state machine
+typedef enum {
+  DIAG_STEP_MENU,
+  DIAG_STEP_ADC_LIVE,
+  DIAG_STEP_BUTTONS_LIVE,
+  DIAG_STEP_RELAY,
+  DIAG_STEP_BUZZER,
+  DIAG_STEP_BOOT_REASON,
+  DIAG_STEP_WATCHDOG_TEST
+} DiagStepState;
+
+static DiagStepState diagStep = DIAG_STEP_MENU;
+static uint8_t diagMenuIndex = 0;
+
 typedef enum {
   MM_ACTION_SAVE_CONFIG,
   MM_ACTION_CAL_FWD,
@@ -61,6 +85,7 @@ typedef enum {
   MM_ACTION_PROTECTIONS,
   MM_ACTION_DISPLAY_MODE,
   MM_ACTION_RUNNING_TEXT,
+  MM_ACTION_DIAGNOSTIC,
   MM_ACTION_BACK_MAIN
 } MainMenuAction_t;
 
@@ -74,6 +99,7 @@ static MainMenuAction_t getMainMenuAction(uint8_t index, bool hasUnsaved) {
       case 4: return MM_ACTION_PROTECTIONS;
       case 5: return MM_ACTION_DISPLAY_MODE;
       case 6: return MM_ACTION_RUNNING_TEXT;
+      case 7: return MM_ACTION_DIAGNOSTIC;
       default: return MM_ACTION_BACK_MAIN;
     }
   } else {
@@ -84,6 +110,7 @@ static MainMenuAction_t getMainMenuAction(uint8_t index, bool hasUnsaved) {
       case 3: return MM_ACTION_PROTECTIONS;
       case 4: return MM_ACTION_DISPLAY_MODE;
       case 5: return MM_ACTION_RUNNING_TEXT;
+      case 6: return MM_ACTION_DIAGNOSTIC;
       default: return MM_ACTION_BACK_MAIN;
     }
   }
@@ -99,7 +126,8 @@ static uint8_t getMainMenuIndexForAction(MainMenuAction_t act, bool hasUnsaved) 
       case MM_ACTION_PROTECTIONS:  return 4;
       case MM_ACTION_DISPLAY_MODE: return 5;
       case MM_ACTION_RUNNING_TEXT: return 6;
-      default:                     return 7;
+      case MM_ACTION_DIAGNOSTIC:   return 7;
+      default:                     return 8;
     }
   } else {
     switch (act) {
@@ -109,7 +137,8 @@ static uint8_t getMainMenuIndexForAction(MainMenuAction_t act, bool hasUnsaved) 
       case MM_ACTION_PROTECTIONS:  return 3;
       case MM_ACTION_DISPLAY_MODE: return 4;
       case MM_ACTION_RUNNING_TEXT: return 5;
-      default:                     return 6;
+      case MM_ACTION_DIAGNOSTIC:   return 6;
+      default:                     return 7;
     }
   }
 }
@@ -605,14 +634,83 @@ void calibrationMenu(CalChannelType ch) {
       } else {
         // Sampling complete!
         calSampledAvgAdc = (calAdcSampleCount > 0) ? (uint16_t)(calAdcSum / calAdcSampleCount) : 0;
-        if (isAddingNewPoint) {
-          calAddPoint(ch, calTargetWatt, calSampledAvgAdc);
+        calAdaptChoice = 0; // Default to >YES
+        calStep = CAL_STEP_ADAPT_PROMPT;
+      }
+      break;
+    }
+
+    case CAL_STEP_ADAPT_PROMPT: {
+      snprintf(line0, sizeof(line0), "Pt:%uW ADC:%4u", calTargetWatt, calSampledAvgAdc);
+      if (calAdaptChoice == 0) {
+        snprintf(line1, sizeof(line1), "Adapt all? >YES NO");
+      } else {
+        snprintf(line1, sizeof(line1), "Adapt all?  YES >NO");
+      }
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonJustPressed(13) || buttonJustPressed(15)) {
+        calAdaptChoice = (calAdaptChoice == 0) ? 1 : 0;
+      } else if (buttonShortRelease(14)) {
+        if (calAdaptChoice == 0) {
+          // YES: Adapt all existing points in this channel proportionally
+          calAdaptAllPoints(ch, calTargetWatt, calSampledAvgAdc);
+          calHasUnsavedChanges = true;
+          hasUnsavedConfig = true;
+          calStatusMsgLine0 = "All Pts Adapted!";
+          calStatusMsgLine1 = "Stored in RAM   ";
+          calStep = CAL_STEP_STATUS_MSG;
         } else {
-          calUpdatePoint(ch, calSelectedPoint, calTargetWatt, calSampledAvgAdc);
+          // NO: User chooses to keep only this single point
+          uint8_t confIdx = 0;
+          if (calCheckConflict(ch, calTargetWatt, calSampledAvgAdc, &confIdx)) {
+            calConflictPointIdx = confIdx;
+            calConflictChoice = 0;
+            calStep = CAL_STEP_CONFLICT_WARN;
+          } else {
+            if (isAddingNewPoint) {
+              calAddPoint(ch, calTargetWatt, calSampledAvgAdc);
+            } else {
+              calUpdatePoint(ch, calSelectedPoint, calTargetWatt, calSampledAvgAdc);
+            }
+            calHasUnsavedChanges = true;
+            hasUnsavedConfig = true;
+            calStep = CAL_STEP_SAMPLE_DONE;
+          }
         }
-        calHasUnsavedChanges = true;
-        hasUnsavedConfig = true;
-        calStep = CAL_STEP_SAMPLE_DONE;
+      }
+      break;
+    }
+
+    case CAL_STEP_CONFLICT_WARN: {
+      CalPoint_t *cp = &activeCal.channels[ch].points[calConflictPointIdx];
+      snprintf(line0, sizeof(line0), "Conflict:%uW=%u", cp->value, cp->raw);
+      if (calConflictChoice == 0) {
+        snprintf(line1, sizeof(line1), "Fix? >ADJUST CANCL");
+      } else {
+        snprintf(line1, sizeof(line1), "Fix?  ADJUST >CANCL");
+      }
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonJustPressed(13) || buttonJustPressed(15)) {
+        calConflictChoice = (calConflictChoice == 0) ? 1 : 0;
+      } else if (buttonShortRelease(14)) {
+        if (calConflictChoice == 0) {
+          // ADJUST: adapt curve to preserve strict monotonicity
+          calAdaptAllPoints(ch, calTargetWatt, calSampledAvgAdc);
+          calHasUnsavedChanges = true;
+          hasUnsavedConfig = true;
+          calStatusMsgLine0 = "Curve Corrected!";
+          calStatusMsgLine1 = "Stored in RAM   ";
+          calStep = CAL_STEP_STATUS_MSG;
+        } else {
+          // CANCEL: Discard sample, preserve intact curve
+          calStatusMsgLine0 = "Sample Discarded";
+          calStatusMsgLine1 = "Curve Unchanged ";
+          calStep = CAL_STEP_STATUS_MSG;
+        }
       }
       break;
     }
@@ -902,6 +1000,141 @@ void protectionMenu(void) {
   }
 }
 
+static const char *diagItems[] = {
+  "1.Live ADC",
+  "2.Buttons Test",
+  "3.Relay Test",
+  "4.Buzzer Test",
+  "5.Boot Reason",
+  "6.Watchdog Test",
+  "7.Back"
+};
+#define DIAG_ITEM_COUNT 7
+
+void diagnosticMenu(void) {
+  char line0[32];
+  char line1[32];
+
+  switch (diagStep) {
+    case DIAG_STEP_MENU: {
+      lcdRender2RowMenu(diagItems, DIAG_ITEM_COUNT, diagMenuIndex);
+
+      if (buttonJustPressed(13)) {
+        diagMenuIndex = (diagMenuIndex + 1) % DIAG_ITEM_COUNT;
+      } else if (buttonJustPressed(15)) {
+        diagMenuIndex = (diagMenuIndex + DIAG_ITEM_COUNT - 1) % DIAG_ITEM_COUNT;
+      } else if (buttonShortRelease(14)) {
+        switch (diagMenuIndex) {
+          case 0: diagStep = DIAG_STEP_ADC_LIVE; break;
+          case 1: diagStep = DIAG_STEP_BUTTONS_LIVE; break;
+          case 2: diagStep = DIAG_STEP_RELAY; break;
+          case 3: diagStep = DIAG_STEP_BUZZER; break;
+          case 4: diagStep = DIAG_STEP_BOOT_REASON; break;
+          case 5: diagStep = DIAG_STEP_WATCHDOG_TEST; break;
+          case 6: // Back
+            buttonMenuIndex = getMainMenuIndexForAction(MM_ACTION_DIAGNOSTIC, hasUnsavedConfig);
+            currentMenu = MAIN_MENU;
+            break;
+        }
+      }
+      break;
+    }
+
+    case DIAG_STEP_ADC_LIVE: {
+      uint16_t rawF = 0, rawR = 0, rawRad = 0;
+      adcCH0Raw(&rawF);
+      adcCH1Raw(&rawR);
+      adcCH2Raw(&rawRad);
+
+      snprintf(line0, sizeof(line0), "F:%4u R:%4u", rawF, rawR);
+      snprintf(line1, sizeof(line1), "RAD:%4u (SEL:Ex)", rawRad);
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonShortRelease(14) || buttonLongHold(14, 500) || buttonJustPressed(15)) {
+        diagStep = DIAG_STEP_MENU;
+      }
+      break;
+    }
+
+    case DIAG_STEP_BUTTONS_LIVE: {
+      // Direct register read of GPIO inputs: PB13 (UP), PB14 (SEL), PB15 (DN)
+      bool upPressed  = !(GPIOB->IDR & (1U << 13));
+      bool selPressed = !(GPIOB->IDR & (1U << 14));
+      bool dnPressed  = !(GPIOB->IDR & (1U << 15));
+
+      snprintf(line0, sizeof(line0), "UP:%s SEL:%s", upPressed ? "PR " : "REL", selPressed ? "PR " : "REL");
+      snprintf(line1, sizeof(line1), "DN:%s (Hld SEL)", dnPressed ? "PR " : "REL");
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonLongHold(14, 500)) {
+        diagStep = DIAG_STEP_MENU;
+      }
+      break;
+    }
+
+    case DIAG_STEP_RELAY: {
+      bool isNorm = (GPIOB->ODR & (1U << 2)) ? true : false;
+      snprintf(line0, sizeof(line0), "Relay Pin PB2");
+      snprintf(line1, sizeof(line1), "State: [ %s ]", isNorm ? "NORMAL" : "TRIPPED");
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonShortRelease(14)) {
+        protectionToggleRelay();
+      } else if (buttonLongHold(14, 500) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        diagStep = DIAG_STEP_MENU;
+      }
+      break;
+    }
+
+    case DIAG_STEP_BUZZER: {
+      bool bzOn = buzzerGet();
+      snprintf(line0, sizeof(line0), "Buzzer Pin PB0");
+      snprintf(line1, sizeof(line1), "State:[ %s ] SEL", bzOn ? "ON " : "OFF");
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonShortRelease(14)) {
+        buzzerSet(!bzOn);
+      } else if (buttonLongHold(14, 500) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        buzzerSet(false);
+        diagStep = DIAG_STEP_MENU;
+      }
+      break;
+    }
+
+    case DIAG_STEP_BOOT_REASON: {
+      snprintf(line0, sizeof(line0), "Boot Reason:");
+      snprintf(line1, sizeof(line1), "%s", watchdogGetResetReasonStr());
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonShortRelease(14) || buttonJustPressed(13) || buttonJustPressed(15)) {
+        diagStep = DIAG_STEP_MENU;
+      }
+      break;
+    }
+
+    case DIAG_STEP_WATCHDOG_TEST: {
+      snprintf(line0, sizeof(line0), "Test IWDG Halt?");
+      snprintf(line1, sizeof(line1), "SEL:Freeze DN:Ex");
+      lcdPrintRow(0, line0);
+      lcdPrintRow(1, line1);
+
+      if (buttonShortRelease(14)) {
+        lcdPrintRow(0, "Halting CPU...");
+        lcdPrintRow(1, "IWDG Will Reset!");
+        watchdogTriggerResetTest();
+      } else if (buttonLongHold(14, 500) || buttonJustPressed(15)) {
+        diagStep = DIAG_STEP_MENU;
+      }
+      break;
+    }
+  }
+}
+
 void displayMenu(MenuState menu) {
   char buf0[32];
   char buf1[32];
@@ -1010,7 +1243,7 @@ void displayMenu(MenuState menu) {
     case MAIN_MENU: {
       char title[32];
       char info[32];
-      uint8_t totalMenuItems = hasUnsavedConfig ? 8 : 7;
+      uint8_t totalMenuItems = hasUnsavedConfig ? 9 : 8;
       if (buttonMenuIndex >= totalMenuItems) buttonMenuIndex = 0;
 
       MainMenuAction_t act = getMainMenuAction(buttonMenuIndex, hasUnsavedConfig);
@@ -1049,6 +1282,10 @@ void displayMenu(MenuState menu) {
         case MM_ACTION_RUNNING_TEXT:
           snprintf(title, sizeof(title), "> Standby Text");
           snprintf(info, sizeof(info), "R Text: %s", activeCal.protection.runningTextEnabled ? "ON" : "OFF");
+          break;
+        case MM_ACTION_DIAGNOSTIC:
+          snprintf(title, sizeof(title), "> Diagnostic");
+          snprintf(info, sizeof(info), "SEL: Test System");
           break;
         case MM_ACTION_BACK_MAIN:
         default:
@@ -1108,6 +1345,11 @@ void displayMenu(MenuState menu) {
             hasUnsavedConfig = true;
             buttonMenuIndex = getMainMenuIndexForAction(MM_ACTION_RUNNING_TEXT, hasUnsavedConfig);
             break;
+          case MM_ACTION_DIAGNOSTIC:
+            currentMenu = MAIN_DIAGNOSTIC_MENU;
+            diagStep = DIAG_STEP_MENU;
+            diagMenuIndex = 0;
+            break;
           case MM_ACTION_BACK_MAIN:
             currentMenu = MAIN_SCREEN;
             break;
@@ -1130,6 +1372,10 @@ void displayMenu(MenuState menu) {
 
     case MAIN_PROTECTION_MENU:
       protectionMenu();
+      break;
+
+    case MAIN_DIAGNOSTIC_MENU:
+      diagnosticMenu();
       break;
 
     case MAIN_MENU_UI: {

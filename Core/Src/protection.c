@@ -1,6 +1,7 @@
 #include "protection.h"
 #include "stm32f401xc.h"
 #include "calibration.h"
+#include "buzzer.h"
 
 static bool relayState = true;
 static bool isTripped = false;
@@ -30,18 +31,21 @@ void protectionLogicInit(void) {
   isTripped = false;
   currentTripCause = TRIP_NONE;
   protectionSet(true); // Normal state: optocoupler enabled
+  buzzerSet(false);
 }
 
 void protectionTrip(TripCause_t cause) {
   isTripped = true;
   currentTripCause = cause;
   protectionSet(false); // Instantly de-energize optocoupler / relay
+  buzzerSet(true);      // Sound buzzer on fault
 }
 
 void protectionReset(void) {
   isTripped = false;
   currentTripCause = TRIP_NONE;
   protectionSet(true);
+  buzzerSet(false);     // Silence buzzer
 }
 
 bool protectionIsTripped(void) {

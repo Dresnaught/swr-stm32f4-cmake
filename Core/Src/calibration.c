@@ -165,6 +165,110 @@ void calSortPoints(CalChannelType ch) {
   }
 }
 
+bool calCheckConflict(CalChannelType ch, uint16_t targetWatt, uint16_t rawADC, uint8_t *conflictIdx) {
+  if (ch >= CAL_CH_COUNT) return false;
+  const CalChannel_t *c = &activeCal.channels[ch];
+  if (c->count == 0) return false;
+
+  for (uint8_t i = 0; i < c->count; i++) {
+    // If it's the exact same wattage, this is a recalibration replacement, not an inversion
+    if (c->points[i].value == targetWatt) continue;
+
+    // Inversion 1: lower wattage has higher or equal ADC
+    if (c->points[i].value < targetWatt && c->points[i].raw >= rawADC) {
+      if (conflictIdx) *conflictIdx = i;
+      return true;
+    }
+    // Inversion 2: higher wattage has lower or equal ADC
+    if (c->points[i].value > targetWatt && c->points[i].raw <= rawADC) {
+      if (conflictIdx) *conflictIdx = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool calAdaptAllPoints(CalChannelType ch, uint16_t targetWatt, uint16_t newRawADC) {
+  if (ch >= CAL_CH_COUNT) return false;
+  CalChannel_t *c = &activeCal.channels[ch];
+  if (c->count == 0) {
+    return calAddPoint(ch, targetWatt, newRawADC);
+  }
+
+  if (targetWatt > c->maxWatts) targetWatt = c->maxWatts;
+  if (newRawADC > 4095) newRawADC = 4095;
+  if (newRawADC == 0) newRawADC = 1;
+
+  // 1. Determine baseline ADC for targetWatt on current curve
+  uint32_t baseADC = 0;
+  int8_t existingIdx = -1;
+
+  for (uint8_t i = 0; i < c->count; i++) {
+    if (c->points[i].value == targetWatt) {
+      existingIdx = (int8_t)i;
+      baseADC = c->points[i].raw;
+      break;
+    }
+  }
+
+  if (existingIdx < 0) {
+    // Target watt is not an existing point: interpolate baseADC from current curve
+    if (targetWatt <= c->points[0].value) {
+      uint32_t p0_val = c->points[0].value ? c->points[0].value : 1;
+      baseADC = ((uint32_t)targetWatt * c->points[0].raw) / p0_val;
+    } else if (targetWatt >= c->points[c->count - 1].value) {
+      uint32_t pLast_val = c->points[c->count - 1].value ? c->points[c->count - 1].value : 1;
+      baseADC = ((uint32_t)targetWatt * c->points[c->count - 1].raw) / pLast_val;
+    } else {
+      for (uint8_t i = 0; i < c->count - 1; i++) {
+        if (targetWatt >= c->points[i].value && targetWatt <= c->points[i + 1].value) {
+          uint32_t y0 = c->points[i].raw;
+          uint32_t y1 = c->points[i + 1].raw;
+          uint32_t x0 = c->points[i].value;
+          uint32_t x1 = c->points[i + 1].value;
+          if (x1 > x0) {
+            baseADC = y0 + ((targetWatt - x0) * (y1 - y0)) / (x1 - x0);
+          } else {
+            baseADC = y0;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  if (baseADC == 0) baseADC = 1;
+
+  // 2. Scale all points proportionally
+  for (uint8_t i = 0; i < c->count; i++) {
+    if (c->points[i].value == targetWatt) {
+      c->points[i].raw = newRawADC;
+    } else {
+      uint32_t scaled = ((uint32_t)c->points[i].raw * newRawADC + (baseADC / 2)) / baseADC;
+      if (scaled > 4095) scaled = 4095;
+      if (scaled == 0 && c->points[i].value > 0) scaled = 1;
+      c->points[i].raw = (uint16_t)scaled;
+    }
+  }
+
+  // 3. If targetWatt was new, add it
+  if (existingIdx < 0 && c->count < CAL_MAX_POINTS) {
+    c->points[c->count].raw = newRawADC;
+    c->points[c->count].value = targetWatt;
+    c->count++;
+  }
+
+  // 4. Sort and guarantee strict monotonicity
+  calSortPoints(ch);
+  for (uint8_t i = 0; i < c->count - 1; i++) {
+    if (c->points[i + 1].raw <= c->points[i].raw) {
+      c->points[i + 1].raw = (c->points[i].raw < 4095) ? c->points[i].raw + 1 : 4095;
+    }
+  }
+
+  return true;
+}
+
 bool calAddPoint(CalChannelType ch, uint16_t targetWatt, uint16_t rawADC) {
   if (ch >= CAL_CH_COUNT) return false;
   CalChannel_t *c = &activeCal.channels[ch];
