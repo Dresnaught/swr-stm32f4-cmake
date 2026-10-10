@@ -118,7 +118,7 @@ The custom digital controller PCB is designed around the **STC8H8K64U-45I-LQFP32
 
 ```
 [ Main Screen ]
-  Line 0: FWD: %4uW S:%u.%02u
+  Line 0: FWD: 0W S:1.1
   Line 1: [Scale Bar] | [Pipe Bar] | [REF / RAD text]
   UP / DOWN: Cycle display view
   SELECT: Open main menu
@@ -205,9 +205,9 @@ swr-stm32f4-cmake/
 │   ├── SCH_Schematic1_2026-09-30.pdf # Schematic
 │   ├── Gerber/                 # 4-layer production Gerbers
 │   ├── front.jpeg              # 3D render (front)
-│   ├── front no 3d.jpeg        # PCB layout (front)
+│   ├── front no 3d.jpeg        # PCB render w/o 3D (front)
 │   ├── back.jpeg               # 3D render (back)
-│   └── back no 3d.jpeg         # PCB layout (back)
+│   └── back no 3d.jpeg         # PCB render w/o 3D (back)
 └── Core/
     ├── Inc/                    # Header files
     │   ├── adc.h
